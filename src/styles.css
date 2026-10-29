@@ -1,0 +1,264 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --color-bg: #09090b;
+  --color-surface: #111114;
+  --color-raised: #18181c;
+  --color-fg: #f4f4f5;
+  --color-muted: #a1a1aa;
+  --color-subtle: #71717a;
+  --color-accent: #5eead4;
+  --color-accent-fg: #042f2e;
+  --color-cream: #f4f1ea;
+  --color-cream-fg: #14120b;
+  --color-border: #27272a;
+  --color-line: #1c1c20;
+  --color-mpesa: #1b9a4b;
+  --color-mpesa-fg: #ecfdf3;
+  --color-danger: #fb7185;
+  --color-warn: #fbbf24;
+  --color-ok: #34d399;
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.75rem;
+  --radius-2xl: 2rem;
+
+  --shadow-lift: 0 18px 50px -24px rgb(0 0 0 / 0.65);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+    font-family: var(--font-display);
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 40%, transparent);
+    color: var(--color-fg);
+  }
+}
+
+@utility atmosphere {
+  background-color: var(--color-bg);
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -10%, rgb(94 234 212 / 0.09), transparent 55%),
+    radial-gradient(ellipse 50% 30% at 100% 100%, rgb(244 241 234 / 0.04), transparent 50%),
+    linear-gradient(to right, rgb(244 244 245 / 0.028) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(244 244 245 / 0.028) 1px, transparent 1px);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+}
+
+.radar-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 1px solid rgb(94 234 212 / 0.22);
+  animation: radar 3.6s var(--ease, cubic-bezier(0.22, 1, 0.36, 1)) infinite;
+}
+
+@keyframes radar {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@utility card-pop {
+  animation: card-pop 0.5s var(--ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+@keyframes card-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-pop {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-ring {
+    animation: none;
+    opacity: 0.25;
+  }
+}
+
+
+/* Operator: snappy, responsive */
+@layer utilities {
+  .admin-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+@media (max-width: 640px) {
+  table {
+    font-size: 0.8rem;
+  }
+}
+
+
+/* ------------------------------------------------------------------
+   Glass theme — PUBLIC pages only (customer portal + public home).
+   Applied by adding the `glass-theme` class to the page root; the
+   operator/admin pages never use it, so they are unchanged.
+   To change the background, replace /public/portal-bg.jpg (or point
+   --portal-bg at another image).
+   ------------------------------------------------------------------ */
+.glass-theme {
+  --portal-bg: url("/portal-bg.jpg");
+
+  /* Re-point the design tokens to translucent glass inside this scope.
+     Every bg-surface / bg-raised / border-border utility follows. */
+  --color-surface: rgb(255 255 255 / 0.01);
+  --color-raised: rgb(255 255 255 / 0.05);
+  --color-border: rgb(255 255 255 / 0.22);
+  --color-line: rgb(255 255 255 / 0.1);
+  --color-muted: #c4c4cc;
+  --color-subtle: #9a9aa6;
+
+  position: relative;
+  isolation: isolate;
+  background: #05060d;
+}
+
+/* Fixed background image + dark overlay (a pseudo-element, because
+   background-attachment: fixed is ignored by iOS Safari). */
+.glass-theme::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100lvh; /* largest viewport: image never resizes/shifts when the mobile address bar hides */
+  z-index: -1;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0); /* own compositor layer: stays put while scrolling */
+  will-change: transform;
+  background:
+    linear-gradient(to bottom, rgb(5 6 13 / 0), rgb(5 6 13 / 0.06)),
+    var(--portal-bg) center top / cover no-repeat,
+    #05060d;
+}
+
+/* Frosted blur on every glass surface (not on hover-only classes). */
+.glass-theme [class*="bg-surface"]:not([class*="hover:bg-surface"]),
+.glass-theme [class*="bg-raised"]:not([class*="hover:bg-raised"]) {
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(2px);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
+  text-shadow: 0 1px 10px rgb(0 0 0 / 0.65);
+}
+
+/* Text that sits directly on the image stays readable */
+.glass-theme h1,
+.glass-theme h2,
+.glass-theme main > p,
+.glass-theme section p {
+  text-shadow: 0 1px 14px rgb(0 0 0 / 0.55);
+}
+
+/* Soft top-light on the glass cards, like the reference design */
+.glass-theme article {
+  background-image: none;
+}
+
+/* Hover states stay glassy instead of turning solid */
+.glass-theme .hover\:bg-surface:hover,
+.glass-theme .hover\:bg-raised:hover {
+  background-color: rgb(255 255 255 / 0.08);
+}
+
+/* Browsers without backdrop-filter: use a darker fill so text stays readable */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-theme {
+    --color-surface: rgb(20 22 34 / 0.88);
+    --color-raised: rgb(28 30 44 / 0.92);
+  }
+}
+
+/* Cheap phones: skip the blur if the user prefers reduced transparency */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-theme {
+    --color-surface: rgb(20 22 34 / 0.92);
+    --color-raised: rgb(28 30 44 / 0.95);
+  }
+  .glass-theme [class*="bg-surface"],
+  .glass-theme [class*="bg-raised"] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+
+/* Toasts on public pages only (body.glass-public is set by useGlassBody).
+   !important is needed because the Toaster sets its colours inline. */
+body.glass-public [data-sonner-toast] {
+  background: rgb(12 14 28 / 0.3) !important;
+  border: 1px solid rgb(255 255 255 / 0.22) !important;
+  color: #f4f4f5 !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border-radius: 1rem !important;
+}
+body.glass-public [data-sonner-toast] [data-description] {
+  color: #d4d4d8 !important;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body.glass-public [data-sonner-toast] { background: rgb(14 16 30 / 0.95) !important; }
+  .glass-dialog { background-color: rgb(14 16 30 / 0.16); }
+}
+.glass-dialog {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 24px 60px -20px rgb(0 0 0 / 0.8);
+}
+
+
+/* Operator login without the image (see LOGIN_BACKGROUND_IMAGE in routes/login.tsx) */
+.glass-theme.glass-no-image::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -5%, rgb(45 212 191 / 0.16), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgb(139 92 246 / 0.14), transparent 60%),
+    #05060d;
+}

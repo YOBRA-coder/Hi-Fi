@@ -1,0 +1,275 @@
+# Changes — customer accounts, sites, rewards page, RADIUS, network map, per-ISP capacity, vouchers & portal polish, outage credit, opening hours, AP revenue
+- **SMS code at customer sign-up** (optional, operator switch in Settings -> SMS & reset; migration `0036_signup_otp.sql`).
+- **Operator accounts** (phone + password, owners/operators, SMS-code password reset; migration `0035_operators.sql`) and an **installable-app (PWA) fix**: working manifest, 192/512 icons, service worker, install button. See MULTI_HARDWARE.md.
+- **Opening hours for Omada/Ruijie** (TelNet-enforced closing, vendor Wi-Fi schedule recommended for hiding the name) and **TextBee SMS code for PIN reset** with an operator-chosen method
+  (All / SMS only / receipt only), migration `0034_sms_otp.sql`. See MULTI_HARDWARE.md.
+- **Portal connects by current site; ISP limits per site; ISP status automatic** (migration `0033_isp_auto_status.sql`). See MULTI_HARDWARE.md.
+- **Network / Network map for multi-hardware**: hardware badges, copyable portal URLs, MikroTik-only panels hidden on Omada/Ruijie cards,
+  hardware-aware empty state, delete confirmation, vendor sites refreshed and counted on the map, Omada AP clients/revenue by AP MAC.
+  Fixed: saving/promoting/deleting an Omada or Ruijie site could clear the MikroTik primary flag. See MULTI_HARDWARE.md.
+- **Operator login glass look**: `/login` now uses the glass theme. A code-only constant `LOGIN_BACKGROUND_IMAGE` at the top of `src/routes/login.tsx` switches the background image on/off (no UI option). The rest of admin is unchanged.
+
+- **Glass theme for the public pages** (client request, 4 Oct 2026): the customer portal (`/portal/*`) and the public home page now use a translucent
+  "glass" look over a dark space background: frosted cards, pill device tabs, teal accents, glass header. Admin/operator pages are NOT touched (they never
+  get the `glass-theme` class). Everything is in the `.glass-theme` block at the end of `src/styles.css`; to change the background image, replace
+  `public/portal-bg.jpg` (portrait, about 720x1280, keep it under ~100 KB so it loads fast on hotspot data). The default is the client's reference image
+  (nebula, network mesh, phone in hand) with its on-image text/cards removed, shown with a light overlay so the glass cards show it through them. No logic or features were changed.
+  Pop-up dialogs on public pages (student-package info) and toast messages on public pages also use glass; admin dialogs/toasts are unchanged
+  (`<DialogContent glass>` is opt-in; toasts are styled only while `body.glass-public` is set by public pages).
+
+- **Legal pages and footer** (client text, 4 Oct 2026, unchanged pending their confirmation): read-only pages at `/portal/legal/privacy`, `/terms`,
+  `/acceptable-use`, `/refund` and `/contact` (contact shows the support phone / WhatsApp / message from Settings). Every customer-portal page now ends with
+  "© 2026 HI-FI Wi-Fi" and links to all five. "By purchasing a package, you agree to the HI-FI Terms & Conditions and Privacy Policy." appears under the
+  Pay button and under the package lists. To edit the wording later, change the text in `src/content/legal.ts` only.
+
+- **M-Pesa go-live hardening** (migration `0031_mpesa_till.sql`): Settings -> M-Pesa now has **Account type** (Paybill or Till/Buy Goods; Till sends
+  `CustomerBuyGoodsOnline` with the till number as PartyB), a **Check M-Pesa setup** button (asks Safaricom for a token with the saved credentials,
+  flags sandbox values left in live mode, http callback, missing fields) and a **KES 1 test prompt** to your own phone. On production the callback is no
+  longer trusted on its own: amount must match and Safaricom's query API must confirm success (a forged POST can't give free internet). A callback that
+  arrives after the status poll already settled the payment now saves the receipt (previously lost, which broke "Already paid?" recovery and PIN reset).
+  STK timestamp is Nairobi time. Production refuses a non-HTTPS callback URL. Added `/api/pay/callback` as an alias of `/api/mpesa/callback` (some
+  Safaricom setups reject URLs containing "mpesa"). Sandbox behaviour is unchanged.
+
+- **Student packages explained before buying** (client request): student cards show "Educational access · Social & entertainment restricted"
+  with an ⓘ. Tapping it opens a short explanation and the list of blocked sites, which comes from Settings -> student blocked domains,
+  so it always matches what the router really blocks.
+
+- **Customer forgot PIN/password** (`/portal/auth` -> "Forgot your PIN or password?"): the customer enters their phone number, an
+  M-Pesa transaction code from a payment made with it, and a new PIN/password. Voucher/points references don't count. Wrong codes are
+  counted separately from sign-in (5 wrong -> 30 min lock on resets only, normal sign-in is unaffected); a successful reset signs
+  every other device out and this one in. Numbers with no paid M-Pesa history still need the operator's **Reset PIN**.
+- **Operator Customers page**: filters for status (active / queued / expired / awaiting activation / no package / blocked), online/offline,
+  package, member vs guest, joined date, sort (newest / expiring soonest / most packages / phone), site switcher, paging (50/page),
+  "Clear filters" and a "Showing x of y" counter. Search takes 07…, 7…, 254… or an M-Pesa code; "07" matches numbers that START with 07.
+- **Payments search by phone fixed**: numbers are stored as 2547XXXXXXXX, so typing 07… never matched. 07…/7…/254…/+254… now all work
+  (leading 07 matches from the start of the number), and letters search the M-Pesa code.
+- **Reports**: "Today / This week / This month" now follow Kenya time (APP_TIMEZONE) instead of UTC (they started 3 hours late, so sales after
+  midnight showed under yesterday until 03:00; the Dashboard "today" and the Payments date filter had the same problem). Daily chart is zero-filled
+  and has 7/14/30/90 day ranges; added comparison vs yesterday / last week / last month, failed/pending counts, free (voucher/points) counts,
+  payment success rate, busiest hours, revenue by site and Export CSV.
+- **Access points**: new **AP number** (the number/tag marked on the device, unique) shown as #3 next to the AP name everywhere; the name is
+  required and explained in the form. An AP that is on but has no paying customers in the chosen period shows a yellow **"On · no income"**
+  (new APs get 24 h; needs the router port set; not shown until the system has measured revenue for some AP). It does not change router health.
+  Migration `0030_reset_ap_label_package_sites.sql`.
+- **Packages: several sites at once** (Packages -> New/Edit -> "Sites where this package is sold"): tick any number of sites, or "All sites".
+  Stored in `package_sites` (existing single-site packages are migrated). The portal shows the package on each ticked site; Site map counts follow.
+
+- **Opening hours per MikroTik** (migration `0029_hours_ap_revenue.sql`; Network → router → Opening hours): weekly schedule, several
+  time windows per day (past-midnight windows supported), East Africa Time (override with `APP_TIMEZONE`). When closed, every TelNet
+  hotspot user on that router is disabled and active sessions are kicked (your own router users are never touched); on opening,
+  only users with a running, non-blocked package are re-enabled. Portal shows a "We're closed — opens 6:00 AM" banner (with an
+  optional custom message); only the package kinds you allow while closed (default Weekly + Monthly) can be bought, the rest show
+  "Opens …". Enforced on payment, voucher redemption and points redemption. "Don't count closed hours" (default on) freezes expiry
+  while closed and adds the closed time back to Daily/Weekly/Monthly/voucher packages on reopening (a package bought while closed is
+  credited only from its purchase). Switching the schedule on/off or editing it applies immediately. Needs the background tick
+  (`/api/cron/tick` every minute on Vercel) to flip at the exact minute.
+- **Revenue per access point**: the tick samples which AP each connected customer is behind (router MAC table -> port -> AP) and
+  splits each successful M-Pesa payment across APs by that share. Network map -> Access points shows Revenue + paying customers for
+  the last 7/30/90 days and flags "Low earner" APs (needs >= 3 APs with data). Each AP must be on its own router port (APs sharing
+  a port/switch can't be told apart and are skipped); revenue builds up from when this is deployed.
+- **CPU and memory** now show after Test connection and on each router card (and the Network map already shows them live).
+
+- **Pause time during outages** (per MikroTik, migration `0028_outage_credit.sql`; Network → router → toggle): when the router is
+  unreachable 3+ minutes (blackout / ISP down) the lost time is added back to running **Daily, Weekly, Monthly and voucher** packages
+  (hourly packages are not covered; packages queued behind a credited one slide back too) when it returns,
+  expiry is frozen while it is down (max 72 h), and credited customers are re-activated on the router. Off by default;
+  without it the calendar clock keeps running through a blackout (the existing "auto-resume" only restores the login).
+  Primary router credits every running package; other routers credit customers of their site.
+- **All routers are now probed** (not only the primary) so outages are noticed per router.
+- **`/api/cron/tick?key=<CRON_SECRET>`**: for hosts without timers (Vercel). Probes every router, expires lapsed packages.
+  Set `CRON_SECRET` and call it every minute from an external scheduler (Vercel Hobby cron is daily-only).
+- **Reset PIN lets the operator type the PIN/password** the customer wants (or generate one); customers can **change their own PIN**
+  on the Rewards page (other devices are signed out).
+
+- **Vouchers management** (migration `0027_guest_limits_voucher_clean.sql`): status tabs (Available/Redeemed/Expired/All),
+  search, batch list with counts, paging; delete one / a batch / all redeemed / all expired; optional **auto-delete
+  redeemed vouchers after 1/7/30/90 days**; "Valid for" expiry when generating; **Print slips** (3-up, cut lines) and CSV.
+  Deleting a voucher never touches Payments (payment keeps its `VCH-<code>` reference).
+- **Portal packages**: compact cards + a small tab bar (All / 1 device / 2 devices) on top.
+- **Guest → account prompt**: "Create free account to unlock 2 devices and referral rewards." 2-device packages now need a
+  free account (enforced when paying and when redeeming a voucher; Settings → "Free account needed for 2-device packages" turns it off).
+  Voucher guests no longer get a referral code.
+- **Package duration** is entered as days / hours / minutes (quick picks: 30 min … 1 week, 1 month).
+- **Revenue** counts successful M-Pesa payments only (failed/cancelled/pending excluded); voucher and loyalty-point
+  redemptions are no longer counted as cash (vouchers shown as a separate note on the dashboard).
+- **Referrals need real money**: a voucher or loyalty-point redemption no longer triggers referral/welcome bonuses (it used to, because it
+  ran through the same activation path). The referral stays pending until the friend's first real M-Pesa payment.
+- **Settings**: removed the unused "Default upload" field (each package sets its own upload).
+
+- **Per-ISP capacity** (migration `0026_capacity_mode.sql`): total speed, per-user cap and seats are now taken from the
+  ISP paths that are connected (Network → ISP path), not one fixed default. Total and seats add up across paths that are
+  up; per-user is the best line's cap; offline paths are skipped. Settings → ISP capacity shows what is in effect, lists
+  each path, warns when the fastest package exceeds the per-user cap, and keeps the old fixed values as a fallback
+  (or forced, with "Use each ISP's own limits" off). New ISP paths start from sensible presets (Airtel/Safaricom 5G
+  30 Mbps, LTE 15, Starlink/fibre 100) with quick 15/30/50/100/200 Mbps buttons. RADIUS uses the same limits.
+
+- **Network map** (`/admin/network-map`, migration `0025_network_map.sql`): site/town selector, summary cards
+  (routers, access points, active users, traffic) that follow the selected site, topology grouped by town
+  (router status, ISP paths, access points under each router), and a detail panel per router with CPU, memory,
+  uptime, active users, bandwidth, access-point table and active ports/interfaces with live in/out rates.
+  Auto-refresh (15 s) + Refresh now. Green = online, yellow = warning, red = offline.
+  Everything is read from the routers themselves; nothing is invented (see limits in the notes below).
+- **Access points**: new AP inventory (Add/Edit/Remove). An AP belongs to a MikroTik and inherits its site.
+  Status = ping from the router; clients = hotspot users behind the AP's router port; the router's own
+  wifi radios appear automatically with signal. "Found on this router" suggests devices from neighbor discovery.
+- **Site filter everywhere**: one switcher shared by Network map, Network, Dashboard and Reports.
+  Payments and customers now get their site automatically at checkout (portal link `?site=slug`, else the
+  package's site, else Main). Existing rows with no site count as the Main site.
+
+- **Sign up / sign in** (`/portal/auth`): phone + PIN or password (scrypt-hashed, 5-try lockout,
+  server-side sessions per device). Guests who already paid must prove ownership with an M-Pesa code.
+  Operators can **Reset PIN** from Customers.
+- **Loyalty points are members-only**; **referral codes are issued at sign up only**. Anyone (even without an
+  account) can still *use* a code at checkout; invalid codes are now rejected instead of silently ignored.
+- **Referral alerts**: the referrer is notified the moment a friend joins, and again when the bonus is paid.
+- **Rewards page** (`/portal/rewards`) holds points, redeem, referral code/stats and alerts (removed from Account).
+- **Queued packages** now show on Account (bug: `queued.length < 0`), including when nothing is active; queued
+  packages start with their full paid time and a stranded-queue sweep was added.
+- **Sites**: Add Router / Add ISP have a site field with "+ New site"; ISPs follow their router's site;
+  packages are scoped per site (`/portal?site=<slug>`); new **Site map** dialog on Network.
+- **Admin**: customer sheet and menus scroll; all customer actions verified/fixed (disconnect, unblock re-enables
+  login, extend/change package push to the router, retry never starts queued packages early).
+- **Extend time is customizable**: the fixed "Extend 1 hour" menu item is now "Extend time…", opening a dialog with Hours + Minutes inputs (quick picks: 30 min, 1 hr, 3 hrs, 1 day) and a live "00 hrs 00 mins" preview.
+- **Settings**: the form never loaded RADIUS values so every save turned RADIUS off — fixed; save errors now show.
+- **RADIUS**: built into the app (PAP+CHAP, Session-Timeout, rate limit), with Apply-to-routers and Check-routers.
+  Migration `0024_customer_accounts.sql`.
+
+# Changes in this pass
+
+New migrations (run in order, they're all additive/`if not exists`):
+- `0019_referral_minutes.sql`
+- `0020_device_join_info.sql`
+- `0021_student_packages.sql`
+
+After pulling these files, run `npm run dev` (or `build`) once before anything
+else — `src/routeTree.gen.ts` is auto-generated by the TanStack Router Vite
+plugin and needs to pick up the new `/portal/add-device` route.
+
+## 1. Referral: points → minutes
+- Referrer gets `referral_bonus_minutes` (default 30) the moment their
+  referred friend's first qualifying payment completes. If the referrer has
+  an active package right now, it's extended immediately (and the new
+  timeout is pushed to the router); otherwise the minutes are banked
+  (`customers.bonus_minutes_balance`) and applied automatically to whatever
+  package they buy next.
+- The referred customer gets `welcome_bonus_minutes` + `referral_bonus_minutes`
+  added directly to their first package — once, only if that package's price
+  is above `referral_min_package_price` (default 20 KES). Below that price,
+  the referral code field doesn't render on the payment page, and the server
+  ignores a code even if one is somehow submitted.
+- All of this is independent of the existing points/redeem loyalty system,
+  which is untouched — both can run at once or either can be turned off
+  (Settings → Loyalty points / Settings → Referral bonus).
+- Host's account page now has a "Refer a friend" card with a Share/Copy
+  button that builds a `?ref=CODE` link; landing on `/portal/payment` with
+  that param pre-fills the code field.
+
+## 2. Voucher redemption — frontend bug fixed
+`src/routes/portal/voucher.tsx` imported a `getDeviceToken` function that
+doesn't exist in `lib/device.ts` — the backend (`vouchers.server.ts`,
+`redeemVoucherPortal`) was fine, this was purely a broken frontend. Rewrote
+the page to use `useDevice()` like the rest of the portal, matched the
+existing visual style, and linked it from the packages page footer (it was
+previously an orphan route with no link pointing to it anywhere).
+
+## 3. Package card: devices allowed + polish
+Shows a "1 device" / "Up to N devices" badge sourced from the existing
+`settings.maxDevicesPerPackage` (this was already a working global setting —
+no new device-count field was needed). Added a subtle entrance animation
+(`card-pop` in `styles.css`, respects `prefers-reduced-motion`) and hover
+lift.
+
+## 4. Admin → Customers: phone search + full history
+Search box filters the table by phone (client-side). Clicking a customer now
+fetches full history via a new `getCustomerHistoryAdmin` fn — every payment,
+every session, referral code + referral count, loyalty points, and banked
+bonus minutes — not just the latest package snapshot as before.
+
+## 5. Second device via host's phone number
+This turned out to mostly already exist at the data layer: your
+`reconnectCustomer()` already enforces the device-slot limit
+(`settings.maxDevicesPerPackage`) and binds a new device token onto a shared
+package. What was missing was a way for *phone B* to trigger it. Added:
+- `joinHostPackage` server fn — looks up the host by phone, calls
+  `reconnectCustomer(hostId, ...)`, returns a clear error
+  (`PACKAGE_IN_USE_MESSAGE`, blocked, expired, or "no active package") on
+  failure.
+- `/portal/add-device` page (phone B side) — enter host's phone, connect.
+- Host's account page lists connected devices (device info + time bound) and
+  links to Add a device when a slot is free.
+- `customer_package_devices.device_info` column added so the host's device
+  list shows *something* identifying each device, not just a count.
+
+## 6. Student packages (cheap, longer, capped speed, domain filter)
+- `packages.category` (`STANDARD` | `STUDENT`) — set per-package in the admin
+  Packages form. Price/duration/speed for a student package are just normal
+  fields you set low/long/capped — no special handling needed there.
+- Settings → Student packages: a textarea of comma-separated domains
+  (default includes Facebook, Instagram, TikTok, YouTube, Netflix, Twitter/X,
+  Snapchat).
+- **Enforcement is best-effort and I could not test it against real
+  hardware.** On activation, a STUDENT package gets its own hotspot user
+  profile (`telnet-student`) whose users land on a `telnet-student`
+  address-list, plus a `layer7-protocol` regex + forward-chain firewall
+  filter dropping matches. This is RouterOS's standard pattern for this kind
+  of thing, but: it's REST API only (RouterOS 7 — the legacy binary-API v6
+  path in this codebase does *not* attempt it), layer7 matching is CPU-
+  heavier than address-list rules and its support/behavior varies by RouterOS
+  version, and it won't see traffic hidden behind DNS-over-HTTPS or a VPN.
+  **Please verify on your actual router that the listed domains are actually
+  blocked for a student login before relying on this.**
+
+## 7. Sites — one real bug fixed, one gap found (not fixed)
+- **Fixed:** adding or deactivating a site in Admin → Network only
+  invalidated the `["network"]` query, not `["sites"]` — so a freshly added
+  site wouldn't show up in the Packages page's site dropdown until its
+  60-second cache expired. Both mutations now invalidate both query keys.
+- **Found, not fixed:** the customer-facing portal doesn't filter packages by
+  site at all (`select * from packages where status = 'ACTIVE'`, no
+  `site_id` filter, anywhere in `fn/portal.ts`). Every customer sees every
+  site's packages regardless of which router/town they're connected through.
+  Fixing this properly means capturing which router a device's hotspot login
+  came through (MAC/NAS-identifier from the captive-portal redirect) and
+  mapping that to a site server-side — a real feature to design and test
+  against your actual MikroTik hotspot login page, not something I wanted to
+  guess at blind. Flagging it clearly rather than shipping a guess.
+
+## Everything from the original list — status
+| Item | Status |
+|---|---|
+| Referral points → minutes, code after signup, gated by price, welcome bonus | Done |
+| Share code / link from account page | Done |
+| Voucher — verify + fix user side | Done (frontend bug fixed) |
+| Package card shows devices allowed | Done |
+| 2-device: second phone joins via host's number | Done |
+| Host sees connected devices list | Done |
+| Profile/login page (phone, password) | Not started — see note below |
+| Packages/settings: keep device count where it is | Confirmed fine as-is, no change needed |
+| Package card UI/UX animation | Done (entrance + hover) |
+| Admin customers: search phone → full history | Done |
+| Verify sites work when adding more | 1 bug fixed, 1 gap documented above |
+| Student packages + non-study domain block | Done, enforcement is best-effort/unverified |
+| Verify 1 & 2 device connections work | Verified — already solid (`shared-users` + profile-per-device-count) |
+
+**Not started: "profile if login, login page, phone, password."** I wasn't
+sure what this refers to beyond the existing portal account page (which
+already shows phone/package/loyalty) and the existing admin login (which is
+already phone+password gated by `authMiddleware`) — if you mean something
+else (e.g. customers should be able to set a password, not just a phone),
+tell me more and I'll build it.
+
+## Operators belong to a site + Airtime/Data shop (migrations 0037, 0038)
+
+**Operators by site.** The owner assigns each operator to one site (Settings → Operators). Operators only see and act on that site's customers, payments, vouchers, live users, reports, dashboard and shop orders; Packages, Network and Settings are owner-only. Owners see all sites. Promoting an operator to owner clears their site.
+
+**Shop** (`/portal/shop`, link on portal home, only when enabled). Customers buy Data / Minutes / SMS / Airtime for their own or another number, paying by M-Pesa STK. Admin → Shop shows orders (scoped to the operator's site) with Retry / Mark delivered / Mark refunded; owners also get Setup.
+- Delivery is a toggle: **Android phone (USSD)** — the phone app polls `GET /api/shop/device/next` and reports `POST /api/shop/device/result` with a Bearer device key (stored hashed, shown once); or **Reseller API** — one templated HTTP call (placeholders `{phone} {phone254} {phoneplus} {payer} {amount} {order} {code} {kind} {name}`, success field/value).
+- Payment is a toggle: same M-Pesa as Wi-Fi, or a separate till/paybill (secrets write-only).
+- Safety: an order with an unknown outcome is never re-sent automatically; it is flagged "needs attention" so a customer is not delivered twice or double-charged.
+- Honest limits: TellNet does not include the Android USSD automation app, and the API option needs your provider's real URL/fields from their docs. Okoa is only a label; whether it works depends on the provider.
+
+## Shop visibility
+Portal home now shows a prominent "Buy now" banner above the packages and a one-time-per-visit pop-up announcing the shop (both only when the shop is enabled). On the shop page, tapping a product opens a pop-up asking for amount (airtime), My/Another number and M-Pesa phone, then pays.
+
+## VPS hosting
+`NITRO_PRESET=node-server` now builds a normal Node server (default stays Vercel). `deploy/` has Docker + Postgres + Caddy (HTTPS), a WireGuard tunnel to the router, an hEX script and DEPLOY_VPS.md.

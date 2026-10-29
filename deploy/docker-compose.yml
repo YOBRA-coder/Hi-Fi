@@ -1,0 +1,49 @@
+# Run from this folder:  docker compose up -d --build
+# app and caddy use the host network so the app can reach the router at its WireGuard address (10.88.0.2).
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tellnet
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: tellnet
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  app:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    restart: unless-stopped
+    network_mode: host
+    depends_on: [db]
+    environment:
+      DATABASE_URL: postgres://tellnet:${DB_PASSWORD}@127.0.0.1:5432/tellnet
+      NITRO_HOST: 127.0.0.1
+      NITRO_PORT: "3000"
+      BETTER_AUTH_SECRET: ${APP_SECRET}
+      OPERATOR_SESSION_SECRET: ${APP_SECRET}
+      CRON_SECRET: ${CRON_SECRET}
+      APP_TIMEZONE: Africa/Nairobi
+
+  tick:
+    image: curlimages/curl:8.10.1
+    restart: unless-stopped
+    network_mode: host
+    depends_on: [app]
+    entrypoint: ["sh", "-c", "while true; do curl -s -m 50 -H \"Authorization: Bearer $$CRON_SECRET\" http://127.0.0.1:3000/api/cron/tick >/dev/null; sleep 60; done"]
+    environment:
+      CRON_SECRET: ${CRON_SECRET}
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+volumes:
+  pgdata:
+  caddy_data:

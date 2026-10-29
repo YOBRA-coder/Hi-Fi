@@ -1,0 +1,2246 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { HARDWARE_LABELS, HARDWARE_TYPES, type HardwareType } from "@/lib/hardware";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Copy, MapPin, PlayCircle, Plus, Radio, RefreshCw, Router, Smartphone, Users, Wifi } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ALL_SITES, useAdminSite } from "@/hooks/use-admin-site";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  applyCamouflage,
+  deleteIsp,
+  deleteMikroTik,
+  getNetwork,
+  getSiteMap,
+  saveIsp,
+  saveMikroTik,
+  saveSite,
+  setIspStatus,
+  setPrimaryMikroTik,
+  setSiteStatus,
+  testMikroTik,
+  refreshMikroTiks,
+  resumeActivePackages,
+} from "@/lib/fn/admin";
+import { CAMOUFLAGE, type CamouflageKind } from "@/lib/camouflage";
+import { formatBytes, formatSpeed, formatStamp } from "@/lib/format";
+import { parseRouterHost } from "@/lib/mikrotik-host";
+import type { Isp, IspStatus, MikroTik, RouterProbe, Site } from "@/lib/types";
+
+export const Route = createFileRoute("/admin/network")({
+  component: NetworkPage,
+});
+
+const emptyRouter = {
+  hardwareType: "mikrotik" as HardwareType,
+  hwOmadacId: "",
+  hwOmadaSite: "",
+  hwOmadaTimeUnit: "ms" as "ms" | "us",
+  hwRuijieGwId: "",
+  name: "",
+  host: "",
+  port: 80,
+  apiUser: "admin",
+  apiPassword: "",
+  hotspotName: "hotspot1",
+  ssl: false,
+  insecureTls: false,
+  apiMode: "rest" as "rest" | "api6",
+  apiPort: 8728,
+  makePrimary: true,
+  pauseOnOutage: false,
+  hoursEnabled: false,
+  hoursSchedule: defaultSchedule(),
+  hoursAllow: ["WEEKLY", "MONTHLY"] as string[],
+  hoursPause: true,
+  hoursMessage: "",
+  siteId: "site_default",
+  newSiteName: "",
+};
+
+/** Typical starting limits per line type. Airtel/Safaricom 5G plans are usually 15 or 30 Mbps. */
+function defaultSchedule(open = "06:00", close = "22:00"): Record<string, [string, string][]> {
+  return Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((d) => [String(d), [[open, close] as [string, string]]]));
+}
+
+const ISP_PRESETS: Record<string, { totalMbps: number; perUserMbps: number; users: number }> = {
+  AIRTEL: { totalMbps: 30, perUserMbps: 5, users: 25 },
+  SAFARICOM: { totalMbps: 30, perUserMbps: 5, users: 25 },
+  LTE: { totalMbps: 15, perUserMbps: 3, users: 15 },
+  STARLINK: { totalMbps: 100, perUserMbps: 10, users: 60 },
+  FIBRE: { totalMbps: 100, perUserMbps: 10, users: 60 },
+};
+
+const emptyIsp = {
+  id: "" as string,
+  name: "",
+  type: "AIRTEL" as const,
+  interfaceName: "",
+  mikrotikId: "",
+  totalKbps: 30720,
+  perUserMaxKbps: 5120,
+  maxUsers: 25,
+  siteId: "site_default",
+  newSiteName: "",
+  autoStatus: true,
+};
+
+const emptySiteForm = {
+  id: "" as string,
+  name: "",
+  slug: "",
+  notes: "",
+};
+
+/** Sentinel for the site dropdown's "create a new site" choice. */
+const NEW_SITE = "__new__";
+
+function NetworkPage() {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["network"],
+    queryFn: () => getNetwork(),
+    refetchInterval: 45_000,
+    staleTime: 20_000,
+    placeholderData: (prev) => prev,
+  });
+  const [open, setOpen] = useState(false);
+  const [ispOpen, setIspOpen] = useState(false);
+  const [siteOpen, setSiteOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [siteFormOpen, setSiteFormOpen] = useState(false);
+  const [editing, setEditing] = useState<MikroTik | null>(null);
+  const [editingSite, setEditingSite] = useState<Site | null>(null);
+  const [form, setForm] = useState(emptyRouter);
+  const [ispForm, setIspForm] = useState(emptyIsp);
+  const [siteForm, setSiteForm] = useState(emptySiteForm);
+  const [probe, setProbe] = useState<RouterProbe | null>(null);
+  /** Id of an Omada/Ruijie site saved from this dialog, so its portal URL can be shown right away. */
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [scriptText, setScriptText] = useState("");
+  const [scriptTitle, setScriptTitle] = useState("");
+  const [siteFilter, setSiteFilter] = useAdminSite();
+
+  const d = q.data;
+  const allRouters = d?.mikrotiks ?? [];
+  const allIsps = d?.isps ?? [];
+  const sites = d?.sites ?? [];
+  const routers =
+    siteFilter === ALL_SITES
+      ? allRouters
+      : allRouters.filter((mt) => (mt.siteId ?? "site_default") === siteFilter);
+  const isps =
+    siteFilter === ALL_SITES
+      ? allIsps
+      : allIsps.filter((isp) => (isp.siteId ?? "site_default") === siteFilter);
+
+  function siteName(id: string | null) {
+    return sites.find((s) => s.id === (id ?? "site_default"))?.name ?? "Main site";
+  }
+
+  const routersBySite = useMemo(() => {
+    const groups = new Map<string, MikroTik[]>();
+    for (const mt of routers) {
+      const key = mt.siteId ?? "site_default";
+      groups.set(key, [...(groups.get(key) ?? []), mt]);
+    }
+    return groups;
+  }, [routers]);
+
+  /** Existing id, or the one just created — the URL the vendor device needs contains it. */
+  const portalId = editing?.id ?? savedId;
+
+  function startAdd(mt?: MikroTik, type?: HardwareType) {
+    setProbe(null);
+    setSavedId(null);
+    if (mt) {
+      const parsed = parseRouterHost(mt.host);
+      setEditing(mt);
+      setForm({
+        hardwareType: mt.hardwareType,
+        hwOmadacId: mt.hwConfig.omadacId ?? "",
+        hwOmadaSite: mt.hwConfig.omadaSite ?? "",
+        hwOmadaTimeUnit: mt.hwConfig.omadaTimeUnit ?? "ms",
+        hwRuijieGwId: mt.hwConfig.ruijieGwId ?? "",
+        name: mt.name,
+        host: mt.hardwareType === "ruijie" ? mt.host : parsed.address,
+        port: parsed.port,
+        apiUser: mt.apiUser,
+        apiPassword: "",
+        hotspotName: mt.hotspotName,
+        apiMode: mt.apiMode === "api6" ? "api6" : "rest",
+        apiPort: mt.apiPort || 8728,
+        ssl: mt.ssl,
+        insecureTls: mt.insecureTls,
+        makePrimary: mt.isPrimary,
+        pauseOnOutage: mt.pauseOnOutage,
+        hoursEnabled: mt.hoursEnabled,
+        hoursSchedule: Object.values(mt.hoursSchedule).some((w) => w.length > 0) ? mt.hoursSchedule : defaultSchedule(),
+        hoursAllow: mt.hoursAllow,
+        hoursPause: mt.hoursPause,
+        hoursMessage: mt.hoursMessage ?? "",
+        siteId: mt.siteId ?? "site_default",
+        newSiteName: "",
+      });
+    } else {
+      setEditing(null);
+      const t = type ?? "mikrotik";
+      setForm({
+        ...emptyRouter,
+        hardwareType: t,
+        ...(t === "omada" ? { port: 8043, ssl: true, insecureTls: true, apiUser: "" } : {}),
+        makePrimary: t === "mikrotik" && !allRouters.some((r) => r.hardwareType === "mikrotik"),
+        siteId: siteFilter === ALL_SITES ? "site_default" : siteFilter,
+      });
+    }
+    setOpen(true);
+  }
+
+  const save = useMutation({
+    mutationFn: () =>
+      saveMikroTik({
+        data: {
+          id: portalId ?? undefined,
+          hardwareType: form.hardwareType,
+          hwOmadacId: form.hwOmadacId,
+          hwOmadaSite: form.hwOmadaSite,
+          hwOmadaTimeUnit: form.hwOmadaTimeUnit,
+          hwRuijieGwId: form.hwRuijieGwId,
+          name: form.name,
+          host: form.host,
+          port: form.port,
+          apiUser: form.apiUser,
+          apiPassword: form.apiPassword || undefined,
+          hotspotName: form.hotspotName,
+          ssl: form.ssl,
+          apiMode: form.apiMode,
+          apiPort: form.apiMode === "api6" ? form.apiPort || form.port || 8728 : form.port,
+          insecureTls: form.insecureTls,
+          makePrimary: form.makePrimary,
+          pauseOnOutage: form.pauseOnOutage,
+          hoursEnabled: form.hoursEnabled,
+          hoursSchedule: form.hoursSchedule,
+          hoursAllow: form.hoursAllow as ("HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY")[],
+          hoursPause: form.hoursPause,
+          hoursMessage: form.hoursMessage,
+          siteId: form.siteId === NEW_SITE ? undefined : form.siteId,
+          newSiteName: form.siteId === NEW_SITE ? form.newSiteName.trim() : undefined,
+        },
+      }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      setProbe(res.probe);
+      if (res.probe.hotspotServers.length) {
+        setForm((f) =>
+          res.probe.hotspotServers.includes(f.hotspotName)
+            ? f
+            : { ...f, hotspotName: res.probe.hotspotServers[0] ?? f.hotspotName },
+        );
+      }
+      toast.success(
+        res.live
+          ? "Router reachable. Activations go to this live MikroTik."
+          : res.probe.ok
+            ? "Router saved and reachable."
+            : form.hardwareType === "ruijie"
+              ? "Saved. Now point the Ruijie gateway at the Server URL shown in this form."
+              : form.hardwareType === "omada"
+                ? "Saved, but the Omada controller could not be reached. Check URL, operator and password."
+                : "Router saved. REST probe failed — check IP → Services → www.",
+      );
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      if (form.hardwareType !== "mikrotik" && !editing) {
+        // New Omada/Ruijie site: stay here — the portal URL to paste into the controller/gateway
+        // only exists now, and the operator needs it before anything works.
+        setSavedId(res.id);
+        toast.message("Now copy the portal URL below into your " + (form.hardwareType === "omada" ? "Omada controller." : "Ruijie gateway."));
+        return;
+      }
+      if (res.probe.ok || form.hardwareType === "ruijie") setOpen(false);
+    },
+    onError: () => toast.error("Could not save the router."),
+  });
+
+  const test = useMutation({
+    mutationFn: (input: { id?: string } | typeof form) => {
+      if ("id" in input && input.id) {
+        return testMikroTik({ data: { id: input.id } });
+      }
+      const f = input as typeof form;
+      return testMikroTik({
+        data: {
+          hardwareType: f.hardwareType,
+          hwOmadacId: f.hwOmadacId,
+          hwOmadaSite: f.hwOmadaSite,
+          hwOmadaTimeUnit: f.hwOmadaTimeUnit,
+          hwRuijieGwId: f.hwRuijieGwId,
+          host: f.host,
+          port: f.port,
+          apiUser: f.apiUser,
+          apiPassword: f.apiPassword || undefined,
+          hotspotName: f.hotspotName,
+          ssl: f.ssl,
+          apiMode: f.apiMode,
+          apiPort: f.apiMode === "api6" ? f.apiPort || f.port || 8728 : f.port,
+          insecureTls: f.insecureTls,
+          id: portalId ?? undefined,
+        },
+      });
+    },
+    onSuccess: (res) => {
+      if (res.probe) setProbe(res.probe);
+      if (res.ok) toast.success(form.hardwareType === "mikrotik" ? "RouterOS REST is reachable." : "Connection OK.");
+      else toast.error(res.error ?? "Unreachable.");
+      if (res.probe?.hotspotServers.length) {
+        setForm((f) =>
+          res.probe!.hotspotServers.includes(f.hotspotName)
+            ? f
+            : { ...f, hotspotName: res.probe!.hotspotServers[0] ?? f.hotspotName },
+        );
+      }
+      qc.invalidateQueries({ queryKey: ["network"] });
+    },
+  });
+
+  const primary = useMutation({
+    mutationFn: (id: string) => setPrimaryMikroTik({ data: { id } }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("This router now handles live activations.");
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteMikroTik({ data: { id } }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("Router removed.");
+      qc.invalidateQueries({ queryKey: ["network"] });
+    },
+  });
+
+  const refresh = useMutation({
+    mutationFn: () => refreshMikroTiks(),
+    onSuccess: (res) => {
+      toast.success(
+        res.total === 0
+          ? "No routers to probe."
+          : `Probed ${res.total} router${res.total === 1 ? "" : "s"} · ${res.online} online.`,
+      );
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: () => toast.error("Could not probe routers."),
+  });
+
+  const resume = useMutation({
+    mutationFn: () => resumeActivePackages(),
+    onSuccess: (res) => {
+      if (res.attempted === 0) {
+        toast.message("No Weekly, Monthly or Voucher packages are due for resume.");
+        return;
+      }
+      toast.success(
+        `Resumed ${res.resumed}/${res.attempted} package(s)` +
+          (res.failed ? ` · ${res.failed} failed` : ""),
+      );
+      qc.invalidateQueries({ queryKey: ["customers"] });
+      qc.invalidateQueries({ queryKey: ["network"] });
+    },
+    onError: () => toast.error("Could not resume packages."),
+  });
+
+  const setStatus = useMutation({
+    mutationFn: (input: { id: string; status: IspStatus }) =>
+      setIspStatus({ data: input }),
+    onSuccess: (res) => {
+      if (!res.ok) toast.error(res.error);
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+
+  const savePath = useMutation({
+    mutationFn: (input: {
+      id?: string;
+      name: string;
+      type: "STARLINK" | "AIRTEL" | "SAFARICOM" | "FIBRE" | "LTE" | "OTHER";
+      interfaceName?: string;
+      mikrotikId?: string;
+      status?: IspStatus;
+      autoStatus?: boolean;
+      totalKbps?: number;
+      perUserMaxKbps?: number;
+      maxUsers?: number;
+      siteId?: string;
+      newSiteName?: string;
+    }) => saveIsp({ data: input }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error("error" in res ? String(res.error) : "Could not save this path.");
+        return;
+      }
+      toast.success("ISP path saved.");
+      qc.invalidateQueries({ queryKey: ["site-map"] });
+      setIspOpen(false);
+      setIspForm(emptyIsp);
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+
+  const removePath = useMutation({
+    mutationFn: (id: string) => deleteIsp({ data: { id } }),
+    onSuccess: () => {
+      toast.success("ISP path removed.");
+      qc.invalidateQueries({ queryKey: ["network"] });
+    },
+  });
+
+  const saveSiteMut = useMutation({
+    mutationFn: (input: { id?: string; name: string; slug: string; notes?: string }) =>
+      saveSite({ data: input }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error("error" in res ? String(res.error) : "Could not save site.");
+        return;
+      }
+      toast.success("Site saved.");
+      qc.invalidateQueries({ queryKey: ["site-map"] });
+      setSiteFormOpen(false);
+      setSiteForm(emptySiteForm);
+      setEditingSite(null);
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["sites"] });
+    },
+    onError: () => toast.error("Could not save site."),
+  });
+
+  const toggleSiteStatus = useMutation({
+    mutationFn: (input: { id: string; status: "ACTIVE" | "INACTIVE" }) =>
+      setSiteStatus({ data: input }),
+    onSuccess: (res) => {
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      qc.invalidateQueries({ queryKey: ["network"] });
+      qc.invalidateQueries({ queryKey: ["sites"] });
+    },
+  });
+
+  const disguise = useMutation({
+    mutationFn: (input: {
+      routerId: string;
+      kind: CamouflageKind;
+      interfaceName?: string;
+    }) => applyCamouflage({ data: input }),
+    onSuccess: (res, vars) => {
+      if (!res.ok) {
+        toast.error("error" in res ? res.error : "Could not apply camouflage.");
+        return;
+      }
+      setScriptTitle(`${CAMOUFLAGE[vars.kind].label} · ${res.interfaceName}`);
+      setScriptText(res.script);
+      if (res.live && !res.error) {
+        toast.success(
+          `WAN now appears as ${CAMOUFLAGE[vars.kind].label} (${res.mac}).`,
+        );
+      } else {
+        toast.message(
+          res.error ?? "REST write skipped. Copy the Terminal script.",
+        );
+        setScriptOpen(true);
+      }
+      qc.invalidateQueries({ queryKey: ["network"] });
+    },
+    onError: () => toast.error("Could not apply camouflage."),
+  });
+
+  function confirmRemove(mt: MikroTik) {
+    const extra =
+      mt.hardwareType === "mikrotik"
+        ? ""
+        : " Customers currently switched on through it lose their record here and the portal stops working for that site.";
+    if (window.confirm(`Remove ${mt.name} (${HARDWARE_LABELS[mt.hardwareType]}) from TelNet?${extra}`)) remove.mutate(mt.id);
+  }
+
+  function alreadyIsp(interfaceName: string) {
+    return isps.some((i) => i.interfaceName === interfaceName);
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight">
+            Network
+          </h1>
+          <p className="mt-1 max-w-xl text-sm text-muted">
+            Register your sites: MikroTik (RouterOS), TP-Link Omada or Ruijie / Reyee.
+            TelNet never load-balances WANs — it only activates users. When a path
+            drops, the same package stays valid.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {sites.length > 1 && (
+            <select
+              value={siteFilter}
+              onChange={(e) => setSiteFilter(e.target.value)}
+              className="h-9 rounded-md border border-border bg-raised px-3 text-sm"
+            >
+              <option value={ALL_SITES}>All sites</option>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <Button variant="outline" onClick={() => setSiteOpen(true)}>
+            <MapPin className="size-4" />
+            Sites
+          </Button>
+          <Button variant="outline" onClick={() => setMapOpen(true)}>
+            <Router className="size-4" />
+            Site map
+          </Button>
+          <Button variant="outline" asChild>
+            <Link to="/admin/network-map">
+              <Radio className="size-4" />
+              Network map
+            </Link>
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+          >
+            <RefreshCw className="size-4" />
+            {refresh.isPending ? "Probing…" : "Refresh"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => resume.mutate()}
+            disabled={resume.isPending}
+            title="Re-activates Weekly, Monthly and Voucher packages that are still valid — Hourly and Daily are never touched."
+          >
+            <PlayCircle className="size-4" />
+            {resume.isPending ? "Resuming…" : "Resume Active Packages"}
+          </Button>
+          <Button onClick={() => startAdd()}>
+            <Plus className="size-4" />
+            Add site
+          </Button>
+        </div>
+      </div>
+
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Router className="size-4 text-accent" />
+          <h2 className="font-display text-lg font-semibold">Routers & controllers</h2>
+        </div>
+        {routers.length === 0 ? (
+          <Card className="p-6">
+            <p className="font-display text-lg font-semibold">Add your first site</p>
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
+              Pick the hardware that runs the hotspot. You can mix them: each site (town) can use a different make.
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {(
+                [
+                  ["mikrotik", "RouterOS 7 REST (www) or RouterOS 6 API (8728). Create a user that can write hotspot users. Cloud-hosted app: expose it with a tunnel or public IP."],
+                  ["omada", "TP-Link controller with External Portal Server. Needs a Hotspot Manager operator and a controller this server can reach (VPS or OC200 with port forwarding)."],
+                  ["ruijie", "Reyee gateway (EG) with WiFiDog V1 external portal. Nothing to log in to: the gateway calls this server. Needs an HTTPS app URL."],
+                ] as [HardwareType, string][]
+              ).map(([t, text]) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => startAdd(undefined, t)}
+                  className="rounded-xl border border-border p-4 text-left transition hover:border-accent/60 hover:bg-accent/5"
+                >
+                  <p className="font-medium">{HARDWARE_LABELS[t]}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted">{text}</p>
+                  <span className="mt-3 inline-flex items-center gap-1 text-xs text-accent">
+                    <Plus className="size-3.5" /> Add {HARDWARE_LABELS[t]}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        ) : siteFilter === ALL_SITES && sites.length > 1 ? (
+          <div className="space-y-5">
+            {[...routersBySite.entries()].map(([siteId, group]) => (
+              <div key={siteId} className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted">
+                  <MapPin className="size-3.5 text-accent" />
+                  {siteName(siteId)}
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {group.map((mt) => (
+                    <RouterCard
+                      key={mt.id}
+                      mt={mt}
+                      siteLabel={siteName(mt.siteId)}
+                      isps={isps}
+                      onTest={() => test.mutate({ id: mt.id })}
+                      onPrimary={() => primary.mutate(mt.id)}
+                      onEdit={() => startAdd(mt)}
+                      onRemove={() => confirmRemove(mt)}
+                      testing={test.isPending}
+                      promoting={primary.isPending}
+                      removing={remove.isPending}
+                      disguising={disguise.isPending}
+                      onCamouflage={(kind, iface) =>
+                        disguise.mutate({
+                          routerId: mt.id,
+                          kind,
+                          interfaceName: iface,
+                        })
+                      }
+                      onImportIface={(iface) => {
+                        if (alreadyIsp(iface.name)) {
+                          toast.message("That interface is already an ISP path.");
+                          return;
+                        }
+                        savePath.mutate({
+                          name: iface.name,
+                          type: "OTHER",
+                          interfaceName: iface.name,
+                          mikrotikId: mt.id,
+                          status: iface.running ? "ONLINE" : "OFFLINE",
+                          totalKbps: 30720,
+                          perUserMaxKbps: 5120,
+                          maxUsers: 25,
+                          siteId: mt.siteId ?? "site_default",
+                        });
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {routers.map((mt) => (
+              <RouterCard
+                key={mt.id}
+                mt={mt}
+                siteLabel={siteName(mt.siteId)}
+                isps={isps}
+                onTest={() => test.mutate({ id: mt.id })}
+                onPrimary={() => primary.mutate(mt.id)}
+                onEdit={() => startAdd(mt)}
+                onRemove={() => confirmRemove(mt)}
+                testing={test.isPending}
+                promoting={primary.isPending}
+                removing={remove.isPending}
+                disguising={disguise.isPending}
+                onCamouflage={(kind, iface) =>
+                  disguise.mutate({
+                    routerId: mt.id,
+                    kind,
+                    interfaceName: iface,
+                  })
+                }
+                onImportIface={(iface) => {
+                  if (alreadyIsp(iface.name)) {
+                    toast.message("That interface is already an ISP path.");
+                    return;
+                  }
+                  savePath.mutate({
+                    name: iface.name,
+                    type: "OTHER",
+                    interfaceName: iface.name,
+                    mikrotikId: mt.id,
+                    status: iface.running ? "ONLINE" : "OFFLINE",
+                    totalKbps: 30720,
+                    perUserMaxKbps: 5120,
+                    maxUsers: 25,
+                    siteId: mt.siteId ?? "site_default",
+                  });
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Wifi className="size-4 text-accent" />
+            <h2 className="font-display text-lg font-semibold">ISP paths</h2>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setIspForm({
+                ...emptyIsp,
+                siteId: siteFilter === ALL_SITES ? "site_default" : siteFilter,
+              });
+              setIspOpen(true);
+            }}
+          >
+            <Plus className="size-4" />
+            Add ISP
+          </Button>
+        </div>
+        {isps.length === 0 ? (
+          <Card className="p-6">
+            <p className="text-sm text-muted">
+              No ISP paths yet. Add Starlink, Airtel, Safaricom or fibre so the
+              dashboard can show WAN health. TelNet still will not steer traffic.
+            </p>
+          </Card>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-3">
+            {isps.map((isp) => (
+              <Card key={isp.id} className="p-5">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-subtle">
+                      {isp.type}
+                    </p>
+                    <h3 className="mt-1 font-display text-xl font-semibold">
+                      {isp.name}
+                    </h3>
+                  </div>
+                  <Badge
+                    tone={
+                      isp.status === "ONLINE"
+                        ? "ok"
+                        : isp.status === "DEGRADED"
+                          ? "warn"
+                          : "danger"
+                    }
+                  >
+                    {isp.status}
+                  </Badge>
+                </div>
+                <p className="mt-3 text-sm text-muted">
+                  {isp.interfaceName ?? "WAN"}
+                  {isp.latencyMs != null ? ` · ${isp.latencyMs} ms` : ""}
+                  {` · ${siteName(isp.siteId)}`}
+                </p>
+                {(() => {
+                  const auto = isp.autoStatus && Boolean(isp.mikrotikId) && Boolean(isp.interfaceName);
+                  return (
+                    <p className={`mt-1 text-xs ${auto ? "text-accent" : "text-subtle"}`}>
+                      {auto
+                        ? `Automatic · follows port ${isp.interfaceName}${isp.statusCheckedAt ? ` · checked ${formatStamp(isp.statusCheckedAt)}` : ""}`
+                        : "Manual · set the status yourself (pick a router and interface for automatic)"}
+                    </p>
+                  );
+                })()}
+                <p className="mt-2 text-sm tabular-nums text-fg">
+                  {formatSpeed(isp.totalKbps)} pool · {formatSpeed(isp.perUserMaxKbps)}
+                  /user · {isp.maxUsers} seats
+                </p>
+                <p className="mt-1 text-xs text-subtle">
+                  {d ? `${d.onlineUsers} online now (all sites)` : ""}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {(["ONLINE", "DEGRADED", "OFFLINE"] as const).map((s) => (
+                    <Button
+                      key={s}
+                      size="sm"
+                      disabled={s === "OFFLINE" && isp.autoStatus && Boolean(isp.mikrotikId) && Boolean(isp.interfaceName)}
+                      title={s === "OFFLINE" && isp.autoStatus && Boolean(isp.mikrotikId) && Boolean(isp.interfaceName) ? "Follows the router port; edit the path to switch automatic status off" : undefined}
+                      variant={isp.status === s ? "accent" : "outline"}
+                      onClick={() => setStatus.mutate({ id: isp.id, status: s })}
+                    >
+                      {s}
+                    </Button>
+                  ))}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setIspForm({
+                        id: isp.id,
+                        name: isp.name,
+                        type: (["STARLINK", "AIRTEL", "SAFARICOM", "FIBRE", "LTE", "OTHER"].includes(
+                          isp.type,
+                        )
+                          ? isp.type
+                          : "OTHER") as typeof emptyIsp.type,
+                        interfaceName: isp.interfaceName ?? "",
+                        mikrotikId: isp.mikrotikId ?? "",
+                        totalKbps: isp.totalKbps,
+                        perUserMaxKbps: isp.perUserMaxKbps,
+                        maxUsers: isp.maxUsers,
+                        siteId: isp.siteId ?? "site_default",
+                        newSiteName: "",
+                        autoStatus: isp.autoStatus,
+                      });
+                      setIspOpen(true);
+                    }}
+                  >
+                    Capacity
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removePath.mutate(isp.id)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <Radio className="size-4 text-accent" />
+          <h2 className="font-display text-lg font-semibold">Events</h2>
+        </div>
+        <ul className="space-y-4">
+          {(d?.events ?? []).map((e) => (
+            <li key={e.id} className="border-b border-border pb-3 last:border-0">
+              <p className="text-xs uppercase tracking-wide text-subtle">
+                {e.eventType.replaceAll("_", " ")} · {formatStamp(e.createdAt)}
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">{e.description}</p>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editing ? "Edit" : "Add"} {HARDWARE_LABELS[form.hardwareType]}
+            </DialogTitle>
+            <DialogDescription>
+              {form.hardwareType === "mikrotik"
+                ? "RouterOS 7 REST — IP → Services → www (80) or www-ssl (443). Not the Winbox API on 8728. Credentials stay on the server."
+                : form.hardwareType === "omada"
+                  ? "TP-Link Omada controller with External Portal Server. Credentials stay on the server."
+                  : "Ruijie / Reyee gateway using the WiFiDog external portal. The gateway calls this server; nothing to log in to."}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate();
+            }}
+          >
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <p className="text-sm font-medium">Hardware</p>
+              <p className="text-xs text-muted">
+                What this site runs. MikroTik keeps working exactly as before. Chosen once; to change it add a new site.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {HARDWARE_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={Boolean(portalId) && form.hardwareType !== t}
+                    title={portalId && form.hardwareType !== t ? "Hardware can't be changed once saved. Add a new site instead." : undefined}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium border disabled:cursor-not-allowed disabled:opacity-40 ${
+                      form.hardwareType === t
+                        ? "border-accent bg-accent/10 text-fg"
+                        : "border-border text-muted"
+                    }`}
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        hardwareType: t,
+                        ...(t === "omada"
+                          ? { port: 8043, ssl: true, insecureTls: true, apiUser: "", makePrimary: false }
+                          : t === "ruijie"
+                            ? { makePrimary: false }
+                            : form.hardwareType !== "mikrotik"
+                              ? { port: 80, ssl: false, insecureTls: false, apiUser: "admin", makePrimary: !allRouters.some((r) => r.hardwareType === "mikrotik") }
+                              : {}),
+                      })
+                    }
+                  >
+                    {HARDWARE_LABELS[t]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {form.hardwareType === "mikrotik" && (
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <p className="text-sm font-medium">RouterOS version</p>
+              <p className="text-xs text-muted">
+                v7 uses REST (www). v6 uses the binary API on port 8728.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium border ${
+                    form.apiMode === "rest"
+                      ? "border-accent bg-accent/10 text-fg"
+                      : "border-border text-muted"
+                  }`}
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      apiMode: "rest",
+                      port: form.ssl ? 443 : 80,
+                    })
+                  }
+                >
+                  RouterOS 7 (REST)
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium border ${
+                    form.apiMode === "api6"
+                      ? "border-accent bg-accent/10 text-fg"
+                      : "border-border text-muted"
+                  }`}
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      apiMode: "api6",
+                      port: 8728,
+                      apiPort: 8728,
+                      ssl: false,
+                    })
+                  }
+                >
+                  RouterOS 6 (API 8728)
+                </button>
+              </div>
+            </div>
+            )}
+
+            <Field label="Name">
+              <Input
+                required
+                placeholder="Main RB750"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </Field>
+            <SiteField
+              sites={sites}
+              siteId={form.siteId}
+              newSiteName={form.newSiteName}
+              onChange={(siteId, newSiteName) => setForm({ ...form, siteId, newSiteName })}
+            />
+            {form.hardwareType !== "ruijie" && (
+            <div className="grid gap-3 sm:grid-cols-[1fr_7rem]">
+              <Field label={form.hardwareType === "omada" ? "Controller address" : "Address"}>
+                <Input
+                  required
+                  placeholder={form.hardwareType === "omada" ? "controller.example.com" : "192.168.88.1"}
+                  value={form.host}
+                  onChange={(e) => setForm({ ...form, host: e.target.value })}
+                />
+              </Field>
+              <Field label={form.hardwareType === "omada" ? "HTTPS port" : "REST port"}>
+                <Input
+                  required
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={form.port}
+                  onChange={(e) =>
+                    setForm({ ...form, port: Number(e.target.value) || 80 })
+                  }
+                />
+              </Field>
+            </div>
+            )}
+            {form.hardwareType !== "ruijie" && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label={form.hardwareType === "omada" ? "Hotspot operator" : "User"}>
+                <Input
+                  required
+                  value={form.apiUser}
+                  onChange={(e) => setForm({ ...form, apiUser: e.target.value })}
+                />
+              </Field>
+              <Field label="Password">
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  required={!editing}
+                  placeholder={editing ? "Leave blank to keep" : ""}
+                  value={form.apiPassword}
+                  onChange={(e) =>
+                    setForm({ ...form, apiPassword: e.target.value })
+                  }
+                />
+              </Field>
+            </div>
+            )}
+            {form.hardwareType === "omada" && (
+              <div className="space-y-3 rounded-lg border border-border p-3">
+                <p className="text-xs text-muted">
+                  In the Omada controller: Hotspot Manager → add an Operator account (use it above), then set
+                  the SSID portal to <b>External Portal Server</b> with the URL below.
+                </p>
+                <PortalUrl
+                  label="Portal URL for Omada"
+                  url={portalId ? `${origin()}/api/hw/entry/${portalId}` : null}
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Controller ID (optional)">
+                    <Input
+                      placeholder="auto-detected"
+                      value={form.hwOmadacId}
+                      onChange={(e) => setForm({ ...form, hwOmadacId: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Omada site name (optional)">
+                    <Input
+                      placeholder="Default"
+                      value={form.hwOmadaSite}
+                      onChange={(e) => setForm({ ...form, hwOmadaSite: e.target.value })}
+                    />
+                  </Field>
+                </div>
+                <Field label="Time unit sent to the controller">
+                  <div className="flex gap-2">
+                    {(["ms", "us"] as const).map((u) => (
+                      <button
+                        key={u}
+                        type="button"
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium border ${
+                          form.hwOmadaTimeUnit === u ? "border-accent bg-accent/10 text-fg" : "border-border text-muted"
+                        }`}
+                        onClick={() => setForm({ ...form, hwOmadaTimeUnit: u })}
+                      >
+                        {u === "ms" ? "Milliseconds (TP-Link docs)" : "Microseconds"}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+                <p className="text-xs text-muted">
+                  Test with a 1-hour package first: if the client is cut off after seconds (or never), switch the unit.
+                </p>
+              </div>
+            )}
+            {form.hardwareType === "ruijie" && (
+              <div className="space-y-3 rounded-lg border border-border p-3">
+                <p className="text-xs text-muted">
+                  On the Ruijie/Reyee gateway: Authentication Template → External Portal → enable WiFiDog (V1),
+                  set Server URL to the address below, add this server and your M-Pesa domains to the pre-auth
+                  allowlist, then apply the template in an Authentication Policy.
+                </p>
+                <PortalUrl
+                  label="Server URL for the gateway"
+                  url={portalId ? `${origin()}/api/hw/wd/${portalId}/` : null}
+                />
+                <Field label="Gateway ID (optional)">
+                  <Input
+                    placeholder="gw_id — leave empty to accept any"
+                    value={form.hwRuijieGwId}
+                    onChange={(e) => setForm({ ...form, hwRuijieGwId: e.target.value })}
+                  />
+                </Field>
+              </div>
+            )}
+            {form.hardwareType === "mikrotik" && (
+            <Field label="Hotspot server">
+              <Input
+                value={form.hotspotName}
+                onChange={(e) =>
+                  setForm({ ...form, hotspotName: e.target.value })
+                }
+              />
+            </Field>
+            )}
+            {form.hardwareType === "mikrotik" && probe && probe.hotspotServers.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {probe.hotspotServers.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className="rounded-full border border-border px-2.5 py-1 text-xs text-muted hover:border-accent hover:text-fg"
+                    onClick={() => setForm({ ...form, hotspotName: name })}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {form.hardwareType === "mikrotik" && (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium">HTTPS (www-ssl)</p>
+                <p className="text-xs text-muted">REST on 443 instead of 80.</p>
+              </div>
+              <Switch
+                checked={form.ssl}
+                onCheckedChange={(v) =>
+                  setForm({
+                    ...form,
+                    ssl: v,
+                    port:
+                      form.port === 80 || form.port === 443 ? (v ? 443 : 80) : form.port,
+                  })
+                }
+              />
+            </div>
+            )}
+            {form.hardwareType !== "ruijie" && (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium">Allow self-signed TLS</p>
+                <p className="text-xs text-muted">
+                  {form.hardwareType === "omada"
+                    ? "Needed for the controller's default certificate."
+                    : "Needed for most RouterOS certificates."}
+                </p>
+              </div>
+              <Switch
+                checked={form.insecureTls}
+                onCheckedChange={(v) => setForm({ ...form, insecureTls: v })}
+              />
+            </div>
+            )}
+            {form.hardwareType === "mikrotik" && (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium">Primary router</p>
+                <p className="text-xs text-muted">
+                  Live activations and hotspot users are created on this router.
+                </p>
+              </div>
+              <Switch
+                checked={form.makePrimary}
+                onCheckedChange={(v) => setForm({ ...form, makePrimary: v })}
+              />
+            </div>
+            )}
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium">Pause time during outages</p>
+                <p className="text-xs text-muted">
+                  If this router goes offline (power cut or ISP down) for 3+ minutes, the lost time is
+                  added back to running Daily, Weekly, Monthly and voucher packages when it returns.
+                  Hourly packages are not covered. Off = the clock keeps running through a blackout.
+                </p>
+              </div>
+              <Switch
+                checked={form.pauseOnOutage}
+                onCheckedChange={(v) => setForm({ ...form, pauseOnOutage: v })}
+              />
+            </div>
+            <HoursEditor
+              vendor={form.hardwareType !== "mikrotik" ? form.hardwareType : undefined}
+              value={{
+                enabled: form.hoursEnabled,
+                schedule: form.hoursSchedule,
+                allow: form.hoursAllow,
+                pause: form.hoursPause,
+                message: form.hoursMessage,
+              }}
+              onChange={(v) =>
+                setForm({
+                  ...form,
+                  hoursEnabled: v.enabled,
+                  hoursSchedule: v.schedule,
+                  hoursAllow: v.allow,
+                  hoursPause: v.pause,
+                  hoursMessage: v.message,
+                })
+              }
+            />
+            {probe && (
+              <div
+                className={
+                  probe.ok
+                    ? "rounded-lg border border-ok/20 bg-ok/10 px-3 py-2 text-sm text-ok"
+                    : "rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger"
+                }
+              >
+                {probe.ok
+                  ? `Reachable${probe.identity ? ` · ${probe.identity}` : ""}${
+                      probe.version ? ` · ${probe.version}` : ""
+                    }${
+                      probe.interfaces.length
+                        ? ` · ${probe.interfaces.filter((i) => i.running).length} interfaces up`
+                        : ""
+                    }${probe.cpuLoad != null ? ` · CPU ${probe.cpuLoad}%` : ""}${
+                      probe.memTotal && probe.memFree != null
+                        ? ` · Memory ${Math.round(((probe.memTotal - probe.memFree) / probe.memTotal) * 100)}% of ${formatBytes(probe.memTotal)}`
+                        : ""
+                    }`
+                  : probe.error}
+              </div>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  test.isPending ||
+                  (form.hardwareType === "mikrotik" && (!form.host || !form.apiUser)) ||
+                  (form.hardwareType === "omada" && (!form.host || !form.apiUser)) ||
+                  (form.hardwareType === "ruijie" && !portalId)
+                }
+                title={form.hardwareType === "ruijie" && !portalId ? "Save first, then set up the gateway: the test checks for its first contact." : undefined}
+                onClick={() => test.mutate(form)}
+              >
+                {test.isPending ? "Testing…" : form.hardwareType === "mikrotik" ? "Test REST" : form.hardwareType === "ruijie" ? "Check gateway contact" : "Test connection"}
+              </Button>
+              <Button type="submit" disabled={save.isPending}>
+                {save.isPending ? "Saving…" : savedId ? "Save changes" : editing ? "Save site" : "Add site"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={ispOpen} onOpenChange={setIspOpen}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{ispForm.id ? "Edit ISP path" : "Add ISP path"}</DialogTitle>
+            <DialogDescription>
+              Monitoring plus limits for the site this path is in: its seats and per-user speed apply to that site only,
+              and when all its paths are OFFLINE customers there can't buy or reconnect. MikroTik still owns failover.
+              Typical 5G pack: 30 Mbps total, 5 Mbps per user, 20–30 seats.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              savePath.mutate({
+                id: ispForm.id || undefined,
+                name: ispForm.name,
+                type: ispForm.type,
+                interfaceName: ispForm.interfaceName || undefined,
+                mikrotikId: ispForm.mikrotikId || undefined,
+                autoStatus: ispForm.autoStatus,
+                totalKbps: ispForm.totalKbps,
+                perUserMaxKbps: ispForm.perUserMaxKbps,
+                maxUsers: ispForm.maxUsers,
+                siteId: ispForm.siteId === NEW_SITE ? undefined : ispForm.siteId,
+                newSiteName: ispForm.siteId === NEW_SITE ? ispForm.newSiteName.trim() : undefined,
+              });
+            }}
+          >
+            <Field label="Name">
+              <Input
+                required
+                placeholder="Starlink"
+                value={ispForm.name}
+                onChange={(e) => setIspForm({ ...ispForm, name: e.target.value })}
+              />
+            </Field>
+            {ispForm.mikrotikId ? (
+              <Field label="Site / town">
+                <p className="flex h-11 items-center rounded-md border border-border bg-raised px-3 text-sm text-muted">
+                  {siteName(allRouters.find((r) => r.id === ispForm.mikrotikId)?.siteId ?? null)}
+                  <span className="ml-2 text-xs text-subtle">— follows the router you pick below</span>
+                </p>
+              </Field>
+            ) : (
+              <SiteField
+                sites={sites}
+                siteId={ispForm.siteId}
+                newSiteName={ispForm.newSiteName}
+                onChange={(siteId, newSiteName) => setIspForm({ ...ispForm, siteId, newSiteName })}
+              />
+            )}
+            <Field label="Type">
+              <select
+                className="flex h-11 w-full rounded-md border border-border bg-raised px-3 text-sm"
+                value={ispForm.type}
+                onChange={(e) => {
+                  const type = e.target.value as typeof ispForm.type;
+                  // Sensible starting limits for a NEW path; editing an existing one never overwrites.
+                  const preset = ISP_PRESETS[type];
+                  setIspForm({
+                    ...ispForm,
+                    type,
+                    ...(ispForm.id || !preset
+                      ? {}
+                      : {
+                          totalKbps: preset.totalMbps * 1024,
+                          perUserMaxKbps: preset.perUserMbps * 1024,
+                          maxUsers: preset.users,
+                        }),
+                  });
+                }}
+              >
+                {["STARLINK", "AIRTEL", "SAFARICOM", "FIBRE", "LTE", "OTHER"].map(
+                  (t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ),
+                )}
+              </select>
+            </Field>
+            <Field label="Router interface (optional)">
+              <Input
+                placeholder="ether1"
+                list="isp-ifaces"
+                value={ispForm.interfaceName}
+                onChange={(e) =>
+                  setIspForm({ ...ispForm, interfaceName: e.target.value })
+                }
+              />
+              <datalist id="isp-ifaces">
+                {(allRouters.find((r) => r.id === ispForm.mikrotikId)?.interfaces ?? []).map((i) => (
+                  <option key={i.name} value={i.name}>
+                    {i.running ? "up" : "down"}
+                  </option>
+                ))}
+              </datalist>
+            </Field>
+            {ispForm.mikrotikId && ispForm.interfaceName ? (
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium">Automatic status</p>
+                  <p className="text-xs text-muted">
+                    ONLINE while this router port is up, OFFLINE when it goes down, checked every minute. When every path
+                    of a site is OFFLINE, customers there can't reconnect or buy. It sees a dead cable or modem, not a
+                    line that is up but has no data. "Degraded" is still yours to set.
+                  </p>
+                </div>
+                <Switch checked={ispForm.autoStatus} onCheckedChange={(v) => setIspForm({ ...ispForm, autoStatus: v })} />
+              </div>
+            ) : (
+              <p className="text-xs text-subtle">
+                Pick a MikroTik and its interface to have the status follow the port automatically; otherwise you set it by hand.
+              </p>
+            )}
+            {allRouters.some((r) => r.hardwareType === "mikrotik") && (
+              <Field label="MikroTik">
+                <select
+                  className="flex h-11 w-full rounded-md border border-border bg-raised px-3 text-sm"
+                  value={ispForm.mikrotikId}
+                  onChange={(e) => {
+                    const mtId = e.target.value;
+                    const owner = allRouters.find((r) => r.id === mtId);
+                    setIspForm({
+                      ...ispForm,
+                      mikrotikId: mtId,
+                      siteId: owner ? (owner.siteId ?? "site_default") : ispForm.siteId,
+                      newSiteName: owner ? "" : ispForm.newSiteName,
+                    });
+                  }}
+                >
+                  <option value="">Any / unassigned</option>
+                  {allRouters.filter((r) => r.hardwareType === "mikrotik").map((mt) => (
+                    <option key={mt.id} value={mt.id}>
+                      {mt.name} · {siteName(mt.siteId)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              <span>Line speed:</span>
+              {[15, 30, 50, 100, 200].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className="rounded-full border border-border px-2.5 py-1 hover:border-accent hover:text-fg"
+                  onClick={() =>
+                    setIspForm({
+                      ...ispForm,
+                      totalKbps: m * 1024,
+                      perUserMaxKbps: Math.min(ispForm.perUserMaxKbps, m * 1024),
+                    })
+                  }
+                >
+                  {m} Mbps
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Total (Mbps)">
+                <Input
+                  type="number"
+                  min={1}
+                  value={Math.round(ispForm.totalKbps / 1024)}
+                  onChange={(e) =>
+                    setIspForm({
+                      ...ispForm,
+                      totalKbps: Math.max(1, Number(e.target.value) || 1) * 1024,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Per user (Mbps)">
+                <Input
+                  type="number"
+                  min={1}
+                  value={Math.round(ispForm.perUserMaxKbps / 1024)}
+                  onChange={(e) =>
+                    setIspForm({
+                      ...ispForm,
+                      perUserMaxKbps: Math.max(1, Number(e.target.value) || 1) * 1024,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Max users">
+                <Input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={ispForm.maxUsers}
+                  onChange={(e) =>
+                    setIspForm({
+                      ...ispForm,
+                      maxUsers: Number(e.target.value) || 1,
+                    })
+                  }
+                />
+              </Field>
+            </div>
+            <DialogFooter>
+              <Button type="submit" disabled={savePath.isPending}>
+                {savePath.isPending ? "Saving…" : ispForm.id ? "Save path" : "Add path"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <SiteMapDialog open={mapOpen} onOpenChange={setMapOpen} />
+
+      <Dialog open={siteOpen} onOpenChange={setSiteOpen}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Sites / towns</DialogTitle>
+            <DialogDescription>
+              Each town keeps its own MikroTiks and ISP paths, managed from this
+              one dashboard.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {sites.map((s) => (
+              <div
+                key={s.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border p-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">
+                    {s.name}{" "}
+                    <span className="font-mono text-xs text-subtle">/{s.slug}</span>
+                  </p>
+                  {s.notes ? (
+                    <p className="mt-0.5 truncate text-xs text-muted">{s.notes}</p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge tone={s.status === "ACTIVE" ? "ok" : "neutral"}>
+                    {s.status === "ACTIVE" ? "Active" : "Inactive"}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingSite(s);
+                      setSiteForm({
+                        id: s.id,
+                        name: s.name,
+                        slug: s.slug,
+                        notes: s.notes ?? "",
+                      });
+                      setSiteFormOpen(true);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={toggleSiteStatus.isPending || s.id === "site_default"}
+                    onClick={() =>
+                      toggleSiteStatus.mutate({
+                        id: s.id,
+                        status: s.status === "ACTIVE" ? "INACTIVE" : "ACTIVE",
+                      })
+                    }
+                  >
+                    {s.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEditingSite(null);
+                setSiteForm(emptySiteForm);
+                setSiteFormOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              Add site
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={siteFormOpen} onOpenChange={setSiteFormOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingSite ? "Edit site" : "Add site"}</DialogTitle>
+            <DialogDescription>
+              e.g. "Town B – Nakuru". The slug is used internally and can't
+              contain spaces.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveSiteMut.mutate({
+                id: siteForm.id || undefined,
+                name: siteForm.name,
+                slug: siteForm.slug,
+                notes: siteForm.notes || undefined,
+              });
+            }}
+          >
+            <Field label="Name">
+              <Input
+                required
+                placeholder="Town B – Nakuru"
+                value={siteForm.name}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setSiteForm((f) => ({
+                    ...f,
+                    name,
+                    slug: f.id
+                      ? f.slug
+                      : name
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, "-")
+                          .replace(/^-+|-+$/g, "")
+                          .slice(0, 40),
+                  }));
+                }}
+              />
+            </Field>
+            <Field label="Slug">
+              <Input
+                required
+                pattern="[a-z0-9-]+"
+                placeholder="town-b"
+                value={siteForm.slug}
+                onChange={(e) =>
+                  setSiteForm({ ...siteForm, slug: e.target.value.toLowerCase() })
+                }
+              />
+            </Field>
+            <Field label="Notes (optional)">
+              <Textarea
+                placeholder="Contact, address, or anything worth noting"
+                value={siteForm.notes}
+                onChange={(e) => setSiteForm({ ...siteForm, notes: e.target.value })}
+              />
+            </Field>
+            <DialogFooter>
+              <Button type="submit" disabled={saveSiteMut.isPending}>
+                {saveSiteMut.isPending ? "Saving…" : editingSite ? "Save site" : "Add site"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scriptOpen} onOpenChange={setScriptOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{scriptTitle || "Terminal script"}</DialogTitle>
+            <DialogDescription>
+              REST could not write the identity. Paste this into Winbox Terminal
+              so the WAN still looks like a phone or PC to the ISP.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            readOnly
+            className="min-h-40 font-mono text-xs"
+            value={scriptText}
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(scriptText);
+                  toast.success("Script copied.");
+                } catch {
+                  toast.message("Copy from the box above.");
+                }
+              }}
+            >
+              Copy script
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function RouterCard({
+  mt,
+  siteLabel,
+  isps,
+  onTest,
+  onPrimary,
+  onEdit,
+  onRemove,
+  onImportIface,
+  onCamouflage,
+  testing,
+  promoting,
+  removing,
+  disguising,
+}: {
+  mt: MikroTik;
+  siteLabel: string;
+  isps: Isp[];
+  onTest: () => void;
+  onPrimary: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  onImportIface: (iface: MikroTik["interfaces"][number]) => void;
+  onCamouflage: (kind: CamouflageKind, iface?: string) => void;
+  testing: boolean;
+  promoting: boolean;
+  removing: boolean;
+  disguising: boolean;
+}) {
+  const [wan, setWan] = useState(
+    mt.camouflageInterface ||
+      mt.interfaces.find((i) => i.running)?.name ||
+      mt.interfaces[0]?.name ||
+      "",
+  );
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="flex flex-wrap items-center gap-x-1.5 text-xs uppercase tracking-wide text-subtle">
+            <span
+              className={
+                mt.hardwareType === "mikrotik"
+                  ? "rounded bg-raised px-1.5 py-0.5 font-semibold text-muted"
+                  : "rounded bg-accent/15 px-1.5 py-0.5 font-semibold text-accent"
+              }
+            >
+              {HARDWARE_LABELS[mt.hardwareType]}
+            </span>
+            {mt.hardwareType === "mikrotik" && mt.boardName ? <span>{mt.boardName}</span> : null}
+            {mt.isPrimary ? <span>· Primary</span> : null}
+            {mt.pauseOnOutage ? <span>· Outage credit on</span> : null}
+          </p>
+          <h3 className="mt-1 font-display text-xl font-semibold">{mt.name}</h3>
+          <p className="mt-0.5 flex items-center gap-1 text-xs text-muted">
+            <MapPin className="size-3" />
+            {siteLabel}
+          </p>
+          <p className="mt-1 font-mono text-xs text-muted">{mt.host}</p>
+          {mt.hardwareType !== "mikrotik" && (
+            <CopyLine
+              label={mt.hardwareType === "omada" ? "Portal URL" : "Server URL"}
+              value={
+                mt.hardwareType === "omada"
+                  ? `${origin()}/api/hw/entry/${mt.id}`
+                  : `${origin()}/api/hw/wd/${mt.id}/`
+              }
+            />
+          )}
+        </div>
+        <Badge
+          tone={
+            mt.status === "ONLINE" ? "ok" : mt.status === "OFFLINE" ? "danger" : "neutral"
+          }
+        >
+          {mt.status}
+        </Badge>
+      </div>
+      {mt.hardwareType !== "mikrotik" ? (
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Portal mode</dt>
+          <dd className="mt-0.5">{mt.hardwareType === "omada" ? "External Portal + controller API" : "WiFiDog external portal"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Devices online</dt>
+          <dd className="mt-0.5 flex items-center gap-1.5 tabular-nums">
+            <Users className="size-3.5 text-muted" />
+            {mt.hwActiveDevices}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">{mt.hardwareType === "omada" ? "Controller" : "Gateway"}</dt>
+          <dd className="mt-0.5">{mt.identity ?? "—"}{mt.version ? ` · ${mt.version}` : ""}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">
+            {mt.hardwareType === "omada" ? "Last login check" : "Last heard from gateway"}
+          </dt>
+          <dd className="mt-0.5">
+            {mt.hardwareType === "omada"
+              ? mt.lastPingAt ? formatStamp(mt.lastPingAt) : "—"
+              : mt.hwSeenAt ? formatStamp(mt.hwSeenAt) : "Never"}
+          </dd>
+        </div>
+      </dl>
+      ) : (
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Identity</dt>
+          <dd className="mt-0.5">{mt.identity ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Version</dt>
+          <dd className="mt-0.5">{mt.version ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Hotspot</dt>
+          <dd className="mt-0.5">{mt.hotspotName} · {mt.apiMode === "api6" ? "ROS6 API" : "ROS7 REST"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">CPU</dt>
+          <dd className="mt-0.5">{mt.cpuLoad == null ? "—" : `${mt.cpuLoad}%`}</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase tracking-wide text-subtle">Memory</dt>
+          <dd className="mt-0.5">
+            {mt.memTotal && mt.memFree != null
+              ? `${Math.round(((mt.memTotal - mt.memFree) / mt.memTotal) * 100)}% of ${formatBytes(mt.memTotal)}`
+              : "—"}
+          </dd>
+        </div>
+      </dl>
+      )}
+      {mt.hardwareType === "mikrotik" && mt.interfaces.length > 0 && (
+        <ul className="mt-4 space-y-1.5">
+          {mt.interfaces.slice(0, 8).map((iface) => {
+            const linked = isps.some((i) => i.interfaceName === iface.name);
+            return (
+              <li
+                key={iface.name}
+                className="flex items-center justify-between gap-2 text-xs"
+              >
+                <span className="font-mono text-muted">
+                  {iface.name}
+                  <span className="ml-2 uppercase tracking-wide text-subtle">
+                    {iface.type}
+                    {iface.running ? " · up" : " · down"}
+                  </span>
+                </span>
+                {!linked && (
+                  <button
+                    type="button"
+                    className="text-accent hover:text-fg"
+                    onClick={() => onImportIface(iface)}
+                  >
+                    Add as ISP
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {mt.lastError && mt.status !== "ONLINE" && (
+        <p className="mt-3 text-sm text-danger">{mt.lastError}</p>
+      )}
+      {mt.lastPingAt && (
+        <p className="mt-2 text-xs text-subtle">
+          Last probe {formatStamp(mt.lastPingAt)}
+        </p>
+      )}
+      {mt.hardwareType === "mikrotik" && (
+      <div className="mt-4 rounded-lg border border-border p-3">
+        <div className="flex items-center gap-2">
+          <Smartphone className="size-4 text-accent" />
+          <p className="text-sm font-medium">WAN camouflage</p>
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          One click makes this MikroTik look like an iPhone, Android phone or PC
+          to the ISP — identity, DHCP hostname, MAC OUI and TTL.
+        </p>
+        {(mt.interfaces.length > 0 || wan) && (
+          <label className="mt-2 block">
+            <span className="text-[10px] uppercase tracking-wide text-subtle">
+              WAN interface
+            </span>
+            <select
+              className="mt-1 flex h-9 w-full rounded-md border border-border bg-raised px-2 text-xs"
+              value={wan}
+              onChange={(e) => setWan(e.target.value)}
+            >
+              {mt.interfaces.length === 0 && wan ? (
+                <option value={wan}>{wan}</option>
+              ) : null}
+              {mt.interfaces.map((i) => (
+                <option key={i.name} value={i.name}>
+                  {i.name}
+                  {i.running ? " · up" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {mt.camouflage && (
+          <p className="mt-2 text-xs text-accent">
+            Appearing as {CAMOUFLAGE[mt.camouflage].label}
+            {mt.camouflageMac ? ` · ${mt.camouflageMac}` : ""}
+            {mt.camouflageInterface ? ` on ${mt.camouflageInterface}` : ""}
+          </p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(["IPHONE", "ANDROID", "PC"] as const).map((kind) => (
+            <Button
+              key={kind}
+              size="sm"
+              variant={mt.camouflage === kind ? "accent" : "outline"}
+              disabled={disguising}
+              onClick={() => onCamouflage(kind, wan || undefined)}
+            >
+              {CAMOUFLAGE[kind].label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      )}
+      {mt.hardwareType === "ruijie" && mt.status !== "ONLINE" && (
+        <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted">
+          Waiting for the gateway: set the Server URL above in the Reyee gateway's WiFiDog template, apply it in an
+          Authentication Policy, then connect a phone to the Wi-Fi. This card turns Online on the gateway's first check-in.
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={onTest} disabled={testing}>
+          {testing ? "Testing…" : mt.hardwareType === "mikrotik" ? "Test REST" : mt.hardwareType === "ruijie" ? "Check contact" : "Test connection"}
+        </Button>
+        {mt.hardwareType === "mikrotik" && !mt.isPrimary && (
+          <Button size="sm" variant="accent" onClick={onPrimary} disabled={promoting}>
+            Use for activations
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button size="sm" variant="danger" onClick={onRemove} disabled={removing}>
+          Remove
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** A label + selectable URL with a copy button (used on Omada / Ruijie cards). */
+function CopyLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mt-2 flex items-center gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] uppercase tracking-wide text-subtle">{label} · paste into the {label === "Portal URL" ? "Omada controller" : "Ruijie gateway"}</p>
+        <p className="break-all font-mono text-[11px] text-muted">{value}</p>
+      </div>
+      <button
+        type="button"
+        aria-label={`Copy ${label}`}
+        className="shrink-0 rounded p-1.5 text-muted hover:text-fg"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(value);
+            toast.success("URL copied.");
+          } catch {
+            toast.message("Select the URL and copy it.");
+          }
+        }}
+      >
+        <Copy className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <Label className="mb-1.5 block">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function SiteField({
+  sites,
+  siteId,
+  newSiteName,
+  onChange,
+}: {
+  sites: Site[];
+  siteId: string;
+  newSiteName: string;
+  onChange: (siteId: string, newSiteName: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Field label="Site / town">
+        <select
+          className="flex h-11 w-full rounded-md border border-border bg-raised px-3 text-sm"
+          value={siteId}
+          onChange={(e) => onChange(e.target.value, e.target.value === NEW_SITE ? newSiteName : "")}
+        >
+          {sites.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+              {s.status === "INACTIVE" ? " (inactive)" : ""}
+            </option>
+          ))}
+          <option value={NEW_SITE}>+ New site / town…</option>
+        </select>
+      </Field>
+      {siteId === NEW_SITE ? (
+        <Field label="New site name">
+          <Input
+            required
+            autoFocus
+            placeholder="e.g. Nakuru Town"
+            value={newSiteName}
+            onChange={(e) => onChange(NEW_SITE, e.target.value)}
+          />
+        </Field>
+      ) : null}
+    </div>
+  );
+}
+
+function SiteMapDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const q = useQuery({
+    queryKey: ["site-map"],
+    queryFn: () => getSiteMap(),
+    enabled: open,
+  });
+  const tone = (status: string) =>
+    status === "ONLINE" ? "ok" : status === "OFFLINE" ? "danger" : "warn";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85dvh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Site map</DialogTitle>
+          <DialogDescription>
+            Which routers, ISP paths and packages belong to each site / town. Change a
+            router's or package's site by editing it.
+          </DialogDescription>
+        </DialogHeader>
+        {q.isLoading ? <p className="text-sm text-muted">Loading…</p> : null}
+        <div className="space-y-4">
+          {(q.data?.sites ?? []).map(({ site, routers, looseIsps, packages }) => (
+            <div key={site.id} className="rounded-xl border border-border p-4">
+              <div className="flex items-center justify-between">
+                <p className="flex items-center gap-1.5 font-display text-lg font-semibold">
+                  <MapPin className="size-4 text-accent" />
+                  {site.name}
+                </p>
+                <Badge tone={site.status === "ACTIVE" ? "ok" : "neutral"}>{site.status}</Badge>
+              </div>
+              <p className="mt-0.5 text-xs text-subtle">
+                slug: {site.slug} · portal link: /portal?site={site.slug}
+              </p>
+              <div className="mt-3 space-y-2 text-sm">
+                {routers.length === 0 && looseIsps.length === 0 ? (
+                  <p className="text-muted">No routers or ISP paths in this site yet.</p>
+                ) : null}
+                {routers.map((r) => (
+                  <div key={r.id} className="rounded-lg bg-raised px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">
+                        {r.name}
+                        {r.isPrimary ? " · primary" : ""}
+                      </span>
+                      <Badge tone={tone(r.status)}>{r.status}</Badge>
+                    </div>
+                    {r.isps.length > 0 ? (
+                      <ul className="mt-1 space-y-0.5 pl-3 text-xs text-muted">
+                        {r.isps.map((i) => (
+                          <li key={i.id} className="flex items-center justify-between">
+                            <span>↳ {i.name} ({i.type})</span>
+                            <span>{i.status}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 pl-3 text-xs text-subtle">No ISP path attached.</p>
+                    )}
+                  </div>
+                ))}
+                {looseIsps.map((i) => (
+                  <div key={i.id} className="flex items-center justify-between rounded-lg bg-raised px-3 py-2">
+                    <span>
+                      {i.name} ({i.type}) <span className="text-xs text-subtle">no router</span>
+                    </span>
+                    <span className="text-xs text-muted">{i.status}</span>
+                  </div>
+                ))}
+                <p className="pt-1 text-xs uppercase tracking-wide text-subtle">
+                  Packages sold only here ({packages.length})
+                </p>
+                <p className="text-muted">
+                  {packages.length === 0
+                    ? "None — this site sells the all-sites packages."
+                    : packages.map((p) => `${p.name} (${p.price})`).join(", ")}
+                </p>
+              </div>
+            </div>
+          ))}
+          {q.data ? (
+            <div className="rounded-xl border border-dashed border-border p-4 text-sm">
+              <p className="font-medium">Sold at every site ({q.data.globalPackages.length})</p>
+              <p className="mt-1 text-muted">
+                {q.data.globalPackages.length === 0
+                  ? "No all-sites packages."
+                  : q.data.globalPackages.map((p) => p.name).join(", ")}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const DAY_ORDER: [string, string][] = [
+  ["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"], ["5", "Fri"], ["6", "Sat"], ["0", "Sun"],
+];
+const KIND_LABEL: Record<string, string> = { HOURLY: "Hourly", DAILY: "Daily", WEEKLY: "Weekly", MONTHLY: "Monthly" };
+
+type HoursValue = {
+  enabled: boolean;
+  schedule: Record<string, [string, string][]>;
+  allow: string[];
+  pause: boolean;
+  message: string;
+};
+
+/** Opening hours for one router: several windows per day, what can be bought while closed. */
+function HoursEditor({ value, onChange, vendor }: { value: HoursValue; onChange: (v: HoursValue) => void; vendor?: "omada" | "ruijie" }) {
+  const set = (patch: Partial<HoursValue>) => onChange({ ...value, ...patch });
+  const setDay = (d: string, windows: [string, string][]) =>
+    set({ schedule: { ...value.schedule, [d]: windows } });
+  const timeBox = "h-9 rounded-md border border-border bg-raised px-2 text-sm";
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Opening hours</p>
+          <p className="text-xs text-muted">
+            {vendor
+              ? "Open this site only at set times. Outside them TelNet ends every customer's access, refuses new logins and shows a \"Closed\" banner on the portal. Off = open all day."
+              : "Run this router only at set times. Outside them the hotspot is switched off and the portal shows a \"Closed\" banner. Off = runs all day."}
+          </p>
+        </div>
+        <Switch checked={value.enabled} onCheckedChange={(v) => set({ enabled: v })} />
+      </div>
+      {vendor && value.enabled ? (
+        <p className="rounded-lg border border-dashed border-border p-2.5 text-xs text-muted">
+          {vendor === "omada"
+            ? "To also hide the Wi-Fi name at closing time, add a Wi-Fi Scheduler in the Omada controller (Settings → Wireless Settings → Wi-Fi Scheduler, action 'Radio Off') with the same hours."
+            : "To also hide the Wi-Fi name at closing time, use the Wi-Fi schedule / Wi-Fi timer in the Ruijie Cloud or the device's Reyee settings (the exact name varies by model) with the same hours."}{" "}
+          Devices already online are cut within about a minute of closing.
+        </p>
+      ) : null}
+
+      {value.enabled ? (
+        <>
+          <div className="flex flex-wrap gap-1.5 text-xs">
+            {[
+              ["Every day 6 AM–10 PM", () => defaultSchedule("06:00", "22:00")],
+              ["Every day 7 AM–9 PM", () => defaultSchedule("07:00", "21:00")],
+              ["24 hours", () => defaultSchedule("00:00", "23:59")],
+            ].map(([label, make]) => (
+              <button
+                key={String(label)}
+                type="button"
+                className="rounded-full border border-border px-2.5 py-1 text-muted hover:border-accent hover:text-fg"
+                onClick={() => set({ schedule: (make as () => Record<string, [string, string][]>)() })}
+              >
+                {String(label)}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            {DAY_ORDER.map(([d, label]) => {
+              const wins = value.schedule[d] ?? [];
+              return (
+                <div key={d} className="flex items-start gap-2">
+                  <span className="w-9 pt-2 text-sm font-medium">{label}</span>
+                  <div className="flex-1 space-y-1.5">
+                    {wins.length === 0 ? <p className="pt-2 text-xs text-subtle">Closed all day</p> : null}
+                    {wins.map((w, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <input
+                          type="time"
+                          className={timeBox}
+                          value={w[0]}
+                          onChange={(e) => setDay(d, wins.map((x, j) => (j === i ? [e.target.value, x[1]] : x)) as [string, string][])}
+                        />
+                        <span className="text-xs text-subtle">to</span>
+                        <input
+                          type="time"
+                          className={timeBox}
+                          value={w[1]}
+                          onChange={(e) => setDay(d, wins.map((x, j) => (j === i ? [x[0], e.target.value] : x)) as [string, string][])}
+                        />
+                        <button
+                          type="button"
+                          aria-label="Remove window"
+                          className="rounded p-1 text-muted hover:text-danger"
+                          onClick={() => setDay(d, wins.filter((_, j) => j !== i))}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="pt-1.5 text-xs text-accent"
+                    onClick={() => setDay(d, [...wins, wins.length ? ["14:00", "18:00"] : ["06:00", "22:00"]])}
+                  >
+                    + time
+                  </button>
+                </div>
+              );
+            })}
+            <p className="text-xs text-subtle">
+              Add more than one time for a day (e.g. 6–12 and 14–22). If the end is earlier than the start it
+              runs past midnight. Times are East Africa Time.
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm font-medium">While closed, customers can still buy</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {Object.keys(KIND_LABEL).map((k) => {
+                const on = value.allow.includes(k);
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => set({ allow: on ? value.allow.filter((x) => x !== k) : [...value.allow, k] })}
+                    className={`rounded-full border px-3 py-1 text-xs ${on ? "border-accent bg-accent/10 text-fg" : "border-border text-muted"}`}
+                  >
+                    {on ? "✓ " : ""}
+                    {KIND_LABEL[k]}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-xs text-subtle">Everything else shows as unavailable until the router opens.</p>
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Don't count closed hours</p>
+              <p className="text-xs text-muted">
+                Closed time is added back to Daily, Weekly, Monthly and voucher packages when it reopens.
+              </p>
+            </div>
+            <Switch checked={value.pause} onCheckedChange={(v) => set({ pause: v })} />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="hours-msg">Message on the portal (optional)</label>
+            <Input
+              id="hours-msg"
+              value={value.message}
+              maxLength={200}
+              placeholder="e.g. Back online in the morning. Weekly and monthly packages are still available."
+              onChange={(e) => set({ message: e.target.value })}
+            />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+
+function origin() {
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+/** A read-only URL the operator copies into the vendor's controller / gateway. */
+function PortalUrl({ label, url }: { label: string; url: string | null }) {
+  return (
+    <Field label={label}>
+      {url ? (
+        <div className="flex gap-2">
+          <Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+          <Button
+            type="button"
+            variant="outline"
+            aria-label="Copy URL"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(url);
+                toast.success("URL copied.");
+              } catch {
+                toast.message("Select the URL and copy it.");
+              }
+            }}
+          >
+            <Copy className="size-4" />
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted">Press “Add site” — the URL (with this site's unique id) then appears here, ready to copy.</p>
+      )}
+    </Field>
+  );
+}
