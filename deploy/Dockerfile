@@ -1,18 +1,20 @@
-# TellNet for a VPS: Node server build (not the Vercel build).
 FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 
-# Vite and other devDependencies are required to build the application.
 RUN npm ci --include=dev
 
 COPY . .
 
 ENV NITRO_PRESET=node-server
+ENV PATH="/app/node_modules/.bin:${PATH}"
 
-# Build the application without requiring production DATABASE_URL.
+# Verify that Vite is installed before building.
+RUN test -x /app/node_modules/.bin/vite || (echo "ERROR: Vite is missing from node_modules/.bin" && exit 1)
+
+# Build the application.
 RUN node --env-file-if-exists=.env scripts/with-app-env.mjs vite build
 
 
