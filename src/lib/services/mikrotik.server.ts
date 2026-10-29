@@ -312,86 +312,59 @@ export async function probeRouter(creds: RouterCreds): Promise<RouterProbe> {
   }
 }
 
-async function ensureDeviceProfile(creds: RouterCreds, maxDevices: number) {
-  const name = maxDevices >= 2 ? "telnet-2dev" : "telnet-1dev";
-  try {
-    const profiles = (await routeros(
-      "/rest/ip/hotspot/user/profile",
-      {},
+/**
+ * RouterOS hotspot USER objects do not accept `rate-limit` or `shared-users`
+ * (the router answers "unknown parameter rate-limit"). Both belong on the user
+ * PROFILE, so every speed / device-count combination gets its own profile
+ * (e.g. telnet-1dev-512k-2048k) and the hotspot user simply points at it.
+ * Student packages keep their dedicated "telnet-student" address-list.
+ * Errors are NOT swallowed: if the profile can't be made, activation fails and
+ * is retried instead of silently giving the customer an unlimited login.
+ */
+async function ensureSpeedProfile(
+  creds: RouterCreds,
+  opts: { maxDevices: number; uploadKbps: number; downloadKbps: number; student?: boolean },
+): Promise<string> {
+  const base = opts.student ? "telnet-student" : opts.maxDevices >= 2 ? "telnet-2dev" : "telnet-1dev";
+  const name = `${base}-${opts.uploadKbps}k-${opts.downloadKbps}k`;
+  const settings: Record<string, string> = {
+    "shared-users": String(opts.maxDevices),
+    "rate-limit": `${opts.uploadKbps}k/${opts.downloadKbps}k`,
+  };
+  if (opts.student) settings["address-list"] = "telnet-student";
+
+  const profiles = (await routeros(
+    "/rest/ip/hotspot/user/profile",
+    {},
+    creds,
+  )) as Array<{ ".id"?: string; name?: string }> | null;
+  const hit = (profiles ?? []).find((p) => p.name === name);
+  if (hit?.[".id"]) {
+    await routeros(
+      `/rest/ip/hotspot/user/profile/${encodeURIComponent(hit[".id"])}`,
+      { method: "PATCH", body: JSON.stringify(settings) },
       creds,
-    )) as Array<{ ".id"?: string; name?: string }> | null;
-    const hit = (profiles ?? []).find((p) => p.name === name);
-    const body = {
-      name,
-      "shared-users": String(maxDevices),
-      "keepalive-timeout": "2m",
-      "idle-timeout": "none",
-    };
-    if (hit?.[".id"]) {
-      await routeros(
-        `/rest/ip/hotspot/user/profile/${encodeURIComponent(hit[".id"])}`,
-        { method: "PATCH", body: JSON.stringify({ "shared-users": String(maxDevices) }) },
-        creds,
-      );
-    } else {
-      await routeros("/rest/ip/hotspot/user/profile", {
+    );
+  } else {
+    await routeros(
+      "/rest/ip/hotspot/user/profile",
+      {
         method: "PUT",
-        body: JSON.stringify(body),
-      }, creds);
-    }
-  } catch {
-    /* profile is best-effort; user still gets shared-users set directly below */
+        body: JSON.stringify({
+          name,
+          ...settings,
+          "keepalive-timeout": "2m",
+          "idle-timeout": "none",
+        }),
+      },
+      creds,
+    );
   }
+  return name;
 }
 
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Best-effort: gives STUDENT packages their own hotspot user profile so
- * their authenticated IPs land on a dedicated address-list ("telnet-student").
- * NOTE: RouterOS REST API (v7) only — the legacy binary-API (v6) path does
- * not attempt domain blocking. Verify layer7 support on your RouterOS
- * version before relying on this in production.
- */
-async function ensureStudentProfile(creds: RouterCreds, maxDevices: number) {
-  try {
-    const profiles = (await routeros(
-      "/rest/ip/hotspot/user/profile",
-      {},
-      creds,
-    )) as Array<{ ".id"?: string; name?: string }> | null;
-    const hit = (profiles ?? []).find((p) => p.name === "telnet-student");
-    const body = {
-      name: "telnet-student",
-      "shared-users": String(maxDevices),
-      "address-list": "telnet-student",
-      "keepalive-timeout": "2m",
-      "idle-timeout": "none",
-    };
-    if (hit?.[".id"]) {
-      await routeros(
-        `/rest/ip/hotspot/user/profile/${encodeURIComponent(hit[".id"])}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            "shared-users": String(maxDevices),
-            "address-list": "telnet-student",
-          }),
-        },
-        creds,
-      );
-    } else {
-      await routeros(
-        "/rest/ip/hotspot/user/profile",
-        { method: "PUT", body: JSON.stringify(body) },
-        creds,
-      );
-    }
-  } catch {
-    /* profile is best-effort; user still gets the default profile below */
-  }
 }
 
 /**
@@ -527,9 +500,14 @@ export async function createAndActivateUser(input: HotspotUserInput) {
     return { username: input.username };
   }
 
-  await ensureDeviceProfile(creds, maxDevices);
-  if (input.category === "STUDENT") {
-    await ensureStudentProfile(creds, maxDevices);
+  const isStudent = input.category === "STUDENT";
+  const profileName = await ensureSpeedProfile(creds, {
+    maxDevices,
+    uploadKbps: input.uploadKbps,
+    downloadKbps: input.downloadKbps,
+    student: isStudent,
+  });
+  if (isStudent) {
     await ensureStudentDomainBlock(creds, input.blockedDomains ?? []);
   }
 
@@ -539,18 +517,12 @@ export async function createAndActivateUser(input: HotspotUserInput) {
     creds,
   )) as Array<{ ".id"?: string }> | null;
 
+  // Speed (rate-limit) and shared-users live on the profile, not on the user.
   const payload: Record<string, string> = {
     name: input.username,
     password: input.password,
-    profile:
-      input.category === "STUDENT"
-        ? "telnet-student"
-        : maxDevices >= 2
-          ? "telnet-2dev"
-          : "telnet-1dev",
+    profile: profileName,
     "limit-uptime": String(input.sessionTimeoutSeconds),
-    "rate-limit": `${input.uploadKbps}k/${input.downloadKbps}k`,
-    "shared-users": String(maxDevices),
     disabled: "false",
     comment: `telnet:${input.customerId}:${maxDevices}dev`,
   };
@@ -558,35 +530,18 @@ export async function createAndActivateUser(input: HotspotUserInput) {
     payload["mac-address"] = input.macAddress;
   }
 
-  try {
-    if (existing && existing[0]?.[".id"]) {
-      await routeros(
-        `/rest/ip/hotspot/user/${encodeURIComponent(existing[0][".id"])}`,
-        { method: "PATCH", body: JSON.stringify(payload) },
-        creds,
-      );
-    } else {
-      await routeros(
-        `/rest/ip/hotspot/user`,
-        { method: "PUT", body: JSON.stringify(payload) },
-        creds,
-      );
-    }
-  } catch {
-    const fallback = { ...payload, profile: "default" };
-    if (existing && existing[0]?.[".id"]) {
-      await routeros(
-        `/rest/ip/hotspot/user/${encodeURIComponent(existing[0][".id"])}`,
-        { method: "PATCH", body: JSON.stringify(fallback) },
-        creds,
-      );
-    } else {
-      await routeros(
-        `/rest/ip/hotspot/user`,
-        { method: "PUT", body: JSON.stringify(fallback) },
-        creds,
-      );
-    }
+  if (existing && existing[0]?.[".id"]) {
+    await routeros(
+      `/rest/ip/hotspot/user/${encodeURIComponent(existing[0][".id"])}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      creds,
+    );
+  } else {
+    await routeros(
+      `/rest/ip/hotspot/user`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      creds,
+    );
   }
 
   await kickExtraActiveSessions(input.username, creds);
