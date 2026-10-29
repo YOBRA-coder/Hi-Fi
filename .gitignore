@@ -32,7 +32,7 @@ Thumbs.db
 
 # Local app/runtime files
 *.local
-
+.sql
 # Coverage
 coverage/
 
