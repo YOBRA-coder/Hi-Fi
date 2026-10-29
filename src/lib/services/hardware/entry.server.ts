@@ -46,7 +46,20 @@ export async function handleMikrotikEntry(request: Request, key: string): Promis
     order by m.is_primary desc, m.created_at
     limit 1
   `;
-  const r = rows[0];
+  // The key is only a hint: if it matches nothing (wrong slug), use the primary MikroTik
+  // so the customer still reaches the portal instead of a "Not found" page.
+  let r = rows[0];
+  if (!r) {
+    const fb = await sql<{ id: string; slug: string | null }>`
+      select m.id, s.slug
+      from mikrotiks m
+      left join sites s on s.id = m.site_id
+      where m.hardware_type = 'mikrotik'
+      order by m.is_primary desc, m.created_at
+      limit 1
+    `;
+    r = fb[0];
+  }
   if (!r) return new Response("Not found", { status: 404 });
   const q = new URL(request.url).searchParams;
   const ctxId = await saveClientContext({
