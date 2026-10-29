@@ -548,6 +548,58 @@ export async function createAndActivateUser(input: HotspotUserInput) {
   return { username: input.username };
 }
 
+/**
+ * Creating a hotspot USER does not give a phone internet by itself: the phone
+ * must also be logged in on the router. This logs one device in (by the IP and
+ * MAC the router's login redirect gave us) with the credentials just created.
+ * REST (RouterOS 7) only. Throws MikroTikError if the router refuses.
+ */
+export async function hotspotLoginDevice(input: {
+  routerId?: string | null;
+  username: string;
+  password: string;
+  ip: string;
+  mac: string;
+}): Promise<boolean> {
+  const creds = input.routerId
+    ? await getRouterCredentialsById(input.routerId)
+    : await getRouterCredentials();
+  if (!creds || creds.apiMode === "api6") return false;
+  // A stale session for the same address would make the login fail as "already logged in".
+  try {
+    const old = (await routeros(
+      `/rest/ip/hotspot/active?address=${encodeURIComponent(input.ip)}`,
+      {},
+      creds,
+    )) as Array<{ ".id"?: string }> | null;
+    for (const row of old ?? []) {
+      if (row[".id"]) {
+        await routeros(
+          `/rest/ip/hotspot/active/${encodeURIComponent(row[".id"])}`,
+          { method: "DELETE" },
+          creds,
+        );
+      }
+    }
+  } catch {
+    /* nothing to clear */
+  }
+  await routeros(
+    "/rest/ip/hotspot/active/login",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        user: input.username,
+        password: input.password,
+        ip: input.ip,
+        "mac-address": input.mac,
+      }),
+    },
+    creds,
+  );
+  return true;
+}
+
 export async function disableUser(username: string) {
   if (!(await hasLiveRouter())) throw new MikroTikError();
   const creds = await getRouterCredentials();

@@ -15,6 +15,7 @@ import {
   disableUser,
   disconnectUser,
   linkAuthorization,
+  loginMikrotikClient,
   resolveHardwareTarget,
 } from "./hardware";
 import { expireDuePackages } from "./expiry.server";
@@ -322,7 +323,23 @@ export async function activateFromPayment(
       // Bought (or re-pushed) while the router is closed for the night: the
       // login exists but stays switched off until the router opens.
       const { isPrimaryClosed } = await import("./hours.server");
-      if (await isPrimaryClosed()) await disableUser(username).catch(() => {});
+      if (await isPrimaryClosed()) {
+        await disableUser(username).catch(() => {});
+      } else {
+        // The hotspot user alone gives no internet: log this phone in on the router too.
+        const loggedIn = await loginMikrotikClient({
+          deviceToken: device?.token,
+          customerId: String(pay.customer_id),
+          username,
+          password,
+        });
+        if (!loggedIn) {
+          await logEvent(
+            "HOTSPOT_LOGIN",
+            `Hotspot user ${username} created but the phone was not logged in on the router (no MAC/IP from the router login page, or the router refused). The customer can press Connect.`,
+          ).catch(() => {});
+        }
+      }
     }
   } catch (err) {
     const failed = err instanceof MikroTikError || err instanceof HardwareError;
