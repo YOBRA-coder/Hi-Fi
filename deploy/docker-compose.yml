@@ -19,7 +19,7 @@ services:
     environment:
       DATABASE_URL: postgres://tellnet:${DB_PASSWORD}@127.0.0.1:5432/tellnet
       NITRO_HOST: 127.0.0.1
-      NITRO_PORT: "3000"
+      NITRO_PORT: "3001"
       BETTER_AUTH_SECRET: ${APP_SECRET}
       OPERATOR_SESSION_SECRET: ${APP_SECRET}
       CRON_SECRET: ${CRON_SECRET}
@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
     network_mode: host
     depends_on: [app]
-    entrypoint: ["sh", "-c", "while true; do curl -s -m 50 -H \"Authorization: Bearer $$CRON_SECRET\" http://127.0.0.1:3000/api/cron/tick >/dev/null; sleep 60; done"]
+    entrypoint: ["sh", "-c", "while true; do curl -s -m 50 -H \"Authorization: Bearer $$CRON_SECRET\" http://127.0.0.1:3001/api/cron/tick >/dev/null; sleep 60; done"]
     environment:
       CRON_SECRET: ${CRON_SECRET}
 
