@@ -18,9 +18,12 @@ async function tick(request: Request) {
 
   const { expireDuePackages } = await import("@/lib/services/expiry.server");
   const { probeAllRouters } = await import("@/lib/services/outage.server");
+  const { ensureClockSane, measureClockSkew } = await import("@/lib/services/clock.server");
+  await ensureClockSane(true).catch(() => {});
+  const clockSkewMs = await measureClockSkew().catch(() => null);
   const probed = await probeAllRouters().catch(() => -1);
   const expired = await expireDuePackages().catch(() => -1);
-  return Response.json({ ok: true, routersProbed: probed, expired, at: new Date().toISOString() });
+  return Response.json({ ok: true, routersProbed: probed, expired, clockSkewMs, at: new Date().toISOString() });
 }
 
 export const Route = createFileRoute("/api/cron/tick")({

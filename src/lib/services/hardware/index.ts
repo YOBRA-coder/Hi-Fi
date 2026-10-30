@@ -21,7 +21,6 @@ import {
   disconnectUser as legacyDisconnectUser,
   getRouterCredentials,
   getRouterCredentialsById,
-  hotspotLoginDevice,
   probeRouter,
 } from "../mikrotik.server";
 import { omadaDriver } from "./omada.driver";
@@ -277,36 +276,4 @@ export async function siteSlugForRouter(routerId: string): Promise<string | null
     select s.slug from mikrotiks m join sites s on s.id = m.site_id where m.id = ${routerId} limit 1
   `;
   return r[0]?.slug ?? null;
-}
-
-/**
- * MikroTik: after the hotspot user exists, log the customer's phone in on the
- * router. Needs the phone's IP + MAC, which the router's login page passes to
- * /api/hw/entry/<site-slug> (stored in hw_clients and tied to the browser).
- * Returns true when a login was sent. Never throws: a failed login must not
- * undo a paid activation (the customer can press Connect again).
- */
-export async function loginMikrotikClient(opts: {
-  deviceToken?: string | null;
-  customerId?: string | null;
-  username: string;
-  password: string;
-}): Promise<boolean> {
-  try {
-    const client = await findClientContext({
-      deviceToken: opts.deviceToken,
-      customerId: opts.customerId,
-    });
-    if (!client || client.vendor !== "mikrotik" || !client.clientIp || !client.clientMac) return false;
-    return await hotspotLoginDevice({
-      routerId: client.routerId,
-      username: opts.username,
-      password: opts.password,
-      ip: client.clientIp,
-      mac: client.clientMac,
-    });
-  } catch (err) {
-    console.error("[mikrotik] device login failed:", err instanceof Error ? err.message : err);
-    return false;
-  }
 }

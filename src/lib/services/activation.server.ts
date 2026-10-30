@@ -15,9 +15,9 @@ import {
   disableUser,
   disconnectUser,
   linkAuthorization,
-  loginMikrotikClient,
   resolveHardwareTarget,
 } from "./hardware";
+import { fmtLocal } from "./clock.server";
 import { expireDuePackages } from "./expiry.server";
 import { awardLoyaltyForPayment, applyReferralMinutesForPayment } from "./loyalty.server";
 import { getSettings, logEvent } from "./settings.server";
@@ -180,7 +180,7 @@ export async function activateFromPayment(
       `;
       await logEvent(
         "QUEUED",
-        `Package ${String(pay.package_name)} queued for ${String(pay.phone)} — will start automatically at ${qStart.toISOString()} when the current package ends.`,
+        `Package ${String(pay.package_name)} queued for ${String(pay.phone)} — will start automatically at ${fmtLocal(qStart)} when the current package ends.`,
       );
       const queuedRow = (
         await sql<SqlRow>`
@@ -323,23 +323,7 @@ export async function activateFromPayment(
       // Bought (or re-pushed) while the router is closed for the night: the
       // login exists but stays switched off until the router opens.
       const { isPrimaryClosed } = await import("./hours.server");
-      if (await isPrimaryClosed()) {
-        await disableUser(username).catch(() => {});
-      } else {
-        // The hotspot user alone gives no internet: log this phone in on the router too.
-        const loggedIn = await loginMikrotikClient({
-          deviceToken: device?.token,
-          customerId: String(pay.customer_id),
-          username,
-          password,
-        });
-        if (!loggedIn) {
-          await logEvent(
-            "HOTSPOT_LOGIN",
-            `Hotspot user ${username} created but the phone was not logged in on the router (no MAC/IP from the router login page, or the router refused). The customer can press Connect.`,
-          ).catch(() => {});
-        }
-      }
+      if (await isPrimaryClosed()) await disableUser(username).catch(() => {});
     }
   } catch (err) {
     const failed = err instanceof MikroTikError || err instanceof HardwareError;
@@ -492,7 +476,7 @@ export async function activateFromPayment(
 
   await logEvent(
     "ACTIVATED",
-    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${expiry.toISOString()}.`,
+    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${fmtLocal(expiry)}.`,
   );
 
   return { ok: true, pack: mapCustomerPackage(packRow) };

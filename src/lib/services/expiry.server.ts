@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db";
 import { disableUser, disconnectUser } from "./hardware";
+import { ensureClockSane } from "./clock.server";
 import { logEvent } from "./settings.server";
 
 /**
@@ -16,6 +17,9 @@ export async function expireDuePackages(): Promise<number> {
   if (sweeping) return 0;
   sweeping = true;
   try {
+    // If the server clock was just corrected (NTP step), shift packages BEFORE
+    // deciding what has expired, so nobody loses time to the correction.
+    await ensureClockSane();
     const n = await sweepExpired();
     await tidyVouchers().catch((err) => console.error("[expiry] voucher tidy failed", err));
     return n;
@@ -58,11 +62,15 @@ async function sweepExpired(): Promise<number> {
   `;
 
   for (const row of due) {
-    await sql`
+    // Idempotent: only the caller that actually flips ACTIVE -> EXPIRED does the
+    // follow-up work, so a concurrent sweep can't double-log or double-promote.
+    const flipped = await sql<{ id: string }>`
       update customer_packages
       set status = 'EXPIRED', activation_status = 'EXPIRED', updated_at = now()
-      where id = ${row.id}
+      where id = ${row.id} and status = 'ACTIVE' and expiry_time <= now()
+      returning id
     `;
+    if (!flipped.length) continue;
     await sql`
       update payments
       set activation_status = 'EXPIRED', updated_at = now()

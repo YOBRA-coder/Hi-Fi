@@ -1,5 +1,6 @@
 import { normalizeKenyanPhone } from "@/lib/phone";
 import { nid } from "@/lib/utils";
+import { trueNowMs } from "./clock.server";
 import { getSettingsSecret } from "./settings.server";
 
 export type StkResult = {
@@ -27,7 +28,7 @@ async function darajaToken(key: string, secret: string, env: string) {
   return { token: json.access_token, base };
 }
 
-/** YYYYMMDDHHmmss in Nairobi time, whatever time zone the server runs in (Vercel is UTC). */
+/** YYYYMMDDHHmmss in Nairobi time, whatever time zone the server runs in, and corrected for a drifted server clock. */
 function timestamp() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Africa/Nairobi",
@@ -38,7 +39,7 @@ function timestamp() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).formatToParts(new Date());
+  }).formatToParts(new Date(trueNowMs()));
   const g = (t: string) => parts.find((x) => x.type === t)?.value ?? "00";
   return `${g("year")}${g("month")}${g("day")}${g("hour")}${g("minute")}${g("second")}`;
 }

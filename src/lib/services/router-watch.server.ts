@@ -5,6 +5,10 @@ async function pollOnce() {
   try {
     // Every router (not just the primary) so outages are noticed — and
     // credited — per router. Imported lazily to avoid a db.ts import cycle.
+    // Shift packages first if the server clock was just corrected.
+    const { ensureClockSane, measureClockSkew } = await import("@/lib/services/clock.server");
+    await ensureClockSane(true).catch(() => {});
+    void measureClockSkew().catch(() => {});
     const { probeAllRouters } = await import("@/lib/services/outage.server");
     await probeAllRouters();
   } catch (err) {

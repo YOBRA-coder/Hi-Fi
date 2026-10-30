@@ -5,6 +5,8 @@ set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
 apt-get update -y
 apt-get install -y wireguard ufw curl ca-certificates
+# Correct time is part of billing (package start/expiry): install chrony and sync before anything else.
+bash "$(dirname "$0")/fix-clock.sh" || echo "WARNING: clock fix failed, run deploy/fix-clock.sh manually"
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 
 # --- WireGuard server ---
