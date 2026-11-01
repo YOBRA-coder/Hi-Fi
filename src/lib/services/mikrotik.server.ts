@@ -544,8 +544,33 @@ export async function createAndActivateUser(input: HotspotUserInput) {
     );
   }
 
+  // limit-uptime is compared with the user's TOTAL uptime on the router, which keeps
+  // growing across every package this phone ever bought. Without a reset, a returning
+  // customer's new package is "already used up" on the router: the phone connects,
+  // then gets no internet (or is cut off early). limit-uptime was set to the time
+  // REMAINING from now, so counting from zero is exactly right.
+  await resetUserCounters(input.username, creds);
   await kickExtraActiveSessions(input.username, creds);
   return { username: input.username };
+}
+
+async function resetUserCounters(username: string, creds: RouterCreds) {
+  try {
+    const rows = (await routeros(
+      `/rest/ip/hotspot/user?name=${encodeURIComponent(username)}`,
+      {},
+      creds,
+    )) as Array<{ ".id"?: string }> | null;
+    const id = rows?.[0]?.[".id"];
+    if (!id) return;
+    await routeros(
+      "/rest/ip/hotspot/user/reset-counters",
+      { method: "POST", body: JSON.stringify({ ".id": id }) },
+      creds,
+    );
+  } catch (err) {
+    console.error("[mikrotik] reset-counters failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 /**

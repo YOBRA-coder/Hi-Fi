@@ -81,7 +81,17 @@ async function sweepExpired(): Promise<number> {
       set status = 'EXPIRED', session_end = now()
       where customer_package_id = ${row.id} and status = 'ACTIVE'
     `;
-    if (row.mikrotik_username) {
+    // Two packages can share one hotspot login (same phone). Only switch the login off when
+    // no OTHER running package still needs it, otherwise a paying customer loses internet.
+    const stillNeeded = row.mikrotik_username
+      ? await sql<{ id: string }>`
+          select id from customer_packages
+          where mikrotik_username = ${row.mikrotik_username} and id <> ${row.id}
+            and status = 'ACTIVE' and expiry_time > now()
+          limit 1
+        `
+      : [];
+    if (row.mikrotik_username && stillNeeded.length === 0) {
       try {
         await disconnectUser(row.mikrotik_username);
         await disableUser(row.mikrotik_username);
@@ -103,6 +113,7 @@ async function sweepExpired(): Promise<number> {
     const nextQueued = await sql<{ payment_id: string }>`
       select payment_id from customer_packages
       where customer_id = ${row.customer_id} and status = 'QUEUED'
+        and (mikrotik_username is not distinct from ${row.mikrotik_username})
       order by start_time asc
       limit 1
     `;
@@ -127,15 +138,16 @@ async function sweepExpired(): Promise<number> {
   // promotion threw, the server restarted mid-loop) must not sit QUEUED
   // forever while the customer has nothing running.
   const stranded = await sql<{ payment_id: string }>`
-    select distinct on (q.customer_id) q.payment_id
+    select distinct on (q.customer_id, q.mikrotik_username) q.payment_id
     from customer_packages q
     where q.status = 'QUEUED'
       and q.start_time <= now()
       and not exists (
         select 1 from customer_packages a
         where a.customer_id = q.customer_id and a.status = 'ACTIVE' and a.expiry_time > now()
+          and (a.mikrotik_username is not distinct from q.mikrotik_username)
       )
-    order by q.customer_id, q.start_time asc
+    order by q.customer_id, q.mikrotik_username, q.start_time asc
   `;
   for (const row of stranded) {
     try {

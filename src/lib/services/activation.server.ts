@@ -19,6 +19,7 @@ import {
   resolveHardwareTarget,
 } from "./hardware";
 import { fmtLocal } from "./clock.server";
+import { singleFlight, type FlightMap } from "./single-flight";
 import { expireDuePackages } from "./expiry.server";
 import { awardLoyaltyForPayment, applyReferralMinutesForPayment } from "./loyalty.server";
 import { getSettings, logEvent } from "./settings.server";
@@ -38,7 +39,29 @@ function randomMac() {
   return `02:${b()}:${b()}:${b()}:${b()}:${b()}`.toUpperCase();
 }
 
-export async function activateFromPayment(
+type ActivateResult = Awaited<ReturnType<typeof activateFromPaymentUnlocked>>;
+const activationFlights: FlightMap<ActivateResult> = new Map();
+
+/**
+ * One activation per payment at a time. The M-Pesa callback, the portal's status poll, the
+ * 1-minute retry tick and "Already paid?" can all arrive within seconds of each other; run in
+ * parallel they created duplicate customer_packages rows (the doubled packages in the customer
+ * view) and one run's router login deleted the other's session, leaving a phone connected
+ * with no internet. Promotions come from the expiry sweep, which can itself be running inside
+ * an activation, so they bypass the queue (as before).
+ */
+export function activateFromPayment(
+  paymentId: string,
+  device?: Parameters<typeof activateFromPaymentUnlocked>[1],
+  opts?: { promote?: boolean },
+): Promise<ActivateResult> {
+  if (opts?.promote) return activateFromPaymentUnlocked(paymentId, device, opts);
+  return singleFlight(activationFlights, paymentId, device?.token ?? "", () =>
+    activateFromPaymentUnlocked(paymentId, device, opts),
+  );
+}
+
+async function activateFromPaymentUnlocked(
   paymentId: string,
   device?: {
     token?: string | null;
@@ -79,6 +102,10 @@ export async function activateFromPayment(
   if (String(pay.status) !== "SUCCESS") return { ok: false, reason: "unpaid" };
   if (String(pay.customer_status) === "BLOCKED") {
     return { ok: false, reason: "blocked" };
+  }
+  // The M-Pesa callback and background retries carry no device: use the one that paid.
+  if (!device?.token && pay.device_token) {
+    device = { ...(device ?? {}), token: String(pay.device_token) };
   }
 
   // Points are earned for the payment itself, independent of whether the
@@ -151,19 +178,53 @@ export async function activateFromPayment(
   // retry or router-recovery re-run of this SAME payment (packRow present)
   // always falls through below — that's what promotes a queued package to
   // ACTIVE once expireDuePackages() decides it's its turn.
-  if (!packRow) {
+  // Parallel mode: a package bought from a DIFFERENT device than the one(s) running gets its own
+  // hotspot login and starts now; a repeat purchase from the SAME device queues behind that
+  // device's own login. Without a known device the old rule (queue behind everything) applies.
+  let chosenUsername: string | null = null;
+  let queueScopeUsernames: string[] | null = null;
+  if (!packRow && settings.parallelDevicePackages && settings.oneDevicePerPackage && device?.token) {
+    const running = await sql<{ mikrotik_username: string | null; mine: boolean; has_bound: boolean }>`
+      select cp.mikrotik_username,
+             exists (select 1 from customer_package_devices d
+                     where d.customer_package_id = cp.id and d.device_token = ${device.token}) as mine,
+             exists (select 1 from customer_package_devices d
+                     where d.customer_package_id = cp.id) as has_bound
+      from customer_packages cp
+      where cp.customer_id = ${pay.customer_id}
+        and cp.status in ('ACTIVE', 'QUEUED') and cp.expiry_time > now()
+    `;
+    const mine = running.filter((r) => r.mine && r.mikrotik_username);
+    if (mine.length > 0) {
+      queueScopeUsernames = [...new Set(mine.map((r) => String(r.mikrotik_username)))];
+      chosenUsername = queueScopeUsernames[0];
+    } else if (running.length > 0 && running.every((r) => r.has_bound)) {
+      const taken = new Set(running.map((r) => String(r.mikrotik_username ?? "")));
+      const base = usernameForPhone(String(pay.phone));
+      let n = 2;
+      while (taken.has(`${base}d${n}`)) n += 1;
+      chosenUsername = `${base}d${n}`;
+      await logEvent(
+        "PARALLEL",
+        `${String(pay.phone)} paid from another device while a package is running: starting ${String(pay.package_name)} now on its own login ${chosenUsername}.`,
+      ).catch(() => {});
+    }
+  }
+
+  if (!packRow && !(chosenUsername && !queueScopeUsernames)) {
     const coverage = await sql<{ latest: string | null }>`
       select max(expiry_time) as latest from customer_packages
       where customer_id = ${pay.customer_id}
         and status in ('ACTIVE', 'QUEUED')
         and expiry_time > now()
+        and (${queueScopeUsernames}::text[] is null or mikrotik_username = any(${queueScopeUsernames}::text[]))
     `;
     const latestCovered = coverage[0]?.latest ? new Date(String(coverage[0].latest)) : null;
     if (latestCovered && latestCovered.getTime() > Date.now()) {
       const qStart = latestCovered;
       const qExpiry = new Date(qStart.getTime() + durationMin * 60_000);
       const id = nid("cp");
-      const username = usernameForPhone(String(pay.phone));
+      const username = chosenUsername ?? usernameForPhone(String(pay.phone));
       await sql`
         insert into customer_packages (
           id, customer_id, package_id, payment_id, start_time, expiry_time,
@@ -243,6 +304,7 @@ export async function activateFromPayment(
 
   const username =
     (packRow?.mikrotik_username as string | null) ||
+    chosenUsername ||
     usernameForPhone(String(pay.phone));
   const password = randomPassword();
   const remaining = Math.max(
@@ -476,6 +538,7 @@ export async function activateFromPayment(
     await sql`
       update sessions set status = 'DISCONNECTED', session_end = now()
       where customer_id = ${pay.customer_id} and status = 'ACTIVE'
+        and mikrotik_username = ${username}
     `;
   }
 
@@ -493,7 +556,7 @@ export async function activateFromPayment(
 
   await logEvent(
     "ACTIVATED",
-    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${fmtLocal(expiry)}.`,
+    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${fmtLocal(expiry)}. Speed limit on router: ${downloadKbps}k down / ${uploadKbps}k up.`,
   );
 
   return { ok: true, pack: mapCustomerPackage(packRow) };
@@ -501,7 +564,7 @@ export async function activateFromPayment(
 
 export async function reconnectCustomer(
   customerId: string,
-  device?: { token?: string | null; info?: string | null; siteId?: string | null },
+  device?: { token?: string | null; info?: string | null; siteId?: string | null; packageId?: string | null },
 ) {
   await expireDuePackages();
   const sql = await getSql();
@@ -513,7 +576,9 @@ export async function reconnectCustomer(
     where cp.customer_id = ${customerId}
       and cp.status = 'ACTIVE'
       and cp.expiry_time > now()
-    order by cp.expiry_time desc
+      and (${device?.packageId ?? null}::text is null or cp.id = ${device?.packageId ?? null}::text)
+    order by (cp.id in (select customer_package_id from customer_package_devices where device_token = ${device?.token ?? null}::text)) desc,
+             cp.expiry_time desc
     limit 1
   `;
   const row = rows[0];

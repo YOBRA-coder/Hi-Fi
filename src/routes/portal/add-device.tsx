@@ -19,6 +19,7 @@ function AddDevicePage() {
   const navigate = useNavigate();
   const { device, ready, update } = useDevice();
   const [hostPhone, setHostPhone] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [joined, setJoined] = useState<string | null>(null);
 
@@ -28,8 +29,11 @@ function AddDevicePage() {
       if (!isKenyanPhone(hostPhone)) {
         throw new Error("Enter the host's phone number.");
       }
+      if (!/^\d{6}$/.test(code.trim())) {
+        throw new Error("Enter the 6-digit code shown on the host's phone.");
+      }
       return joinHostPackage({
-        data: { hostPhone, token: device.token, deviceInfo: deviceInfo() },
+        data: { hostPhone, code: code.trim(), token: device.token, deviceInfo: deviceInfo() },
       });
     },
     onSuccess: (res) => {
@@ -59,7 +63,8 @@ function AddDevicePage() {
       </h1>
       <p className="mt-3 text-sm text-muted">
         If a package allows more than one device, enter the phone number it
-        was bought with to connect this device too — no extra payment.
+        was bought with and the 6-digit code from the host's phone (Your
+        package → Share code) to connect this device too — no extra payment.
       </p>
       <form
         className="mt-6 space-y-4"
@@ -79,6 +84,20 @@ function AddDevicePage() {
             value={hostPhone}
             onChange={(e) => setHostPhone(e.target.value)}
             className="h-12 text-base"
+            required
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="shareCode">Code from the host's phone</Label>
+          <Input
+            id="shareCode"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            placeholder="6-digit code"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            className="h-12 text-base tracking-widest"
             required
           />
         </div>

@@ -130,7 +130,8 @@ async function findActiveForCustomer(
     where cp.customer_id = ${customerId}
       and cp.status = 'ACTIVE'
       and cp.expiry_time > now()
-    order by cp.expiry_time desc
+    order by (cp.id in (select customer_package_id from customer_package_devices where device_token = ${deviceToken ?? null}::text)) desc,
+             cp.expiry_time desc
     limit 1
   `;
   const row = rows[0];
@@ -138,6 +139,7 @@ async function findActiveForCustomer(
   const sessions = await sql<{ id: string }>`
     select id from sessions
     where customer_id = ${customerId} and status = 'ACTIVE'
+      and (mikrotik_username = ${row.mikrotik_username ?? null}::text or ${row.mikrotik_username ?? null}::text is null)
     limit 1
   `;
   const pack = mapCustomerPackage(row);
@@ -448,6 +450,29 @@ export const startPayment = createServerFn({ method: "POST" })
       await announceReferral(referrerToNotify, phone, null).catch(() => {});
     }
 
+    // Double-tap guard: the same phone asking for the same package again while its first M-Pesa
+    // prompt is still pending gets that payment back, instead of a second prompt that would be
+    // paid twice and create a second package.
+    const dup = await sql<SqlRow>`
+      select id, checkout_request_id, merchant_request_id from payments
+      where customer_id = ${customerId} and package_id = ${pkg.id} and phone = ${phone}
+        and status = 'PENDING' and created_at > now() - interval '75 seconds'
+      order by created_at desc limit 1
+    `;
+    if (dup[0]) {
+      return {
+        ok: true as const,
+        paymentId: String(dup[0].id),
+        customerId,
+        checkoutRequestId: String(dup[0].checkout_request_id),
+        amount: Number(pkg.price),
+        packageName: String(pkg.name),
+        phone,
+        referralApplied,
+        referralBonusMinutes: settings.welcomeBonusMinutes + settings.referralBonusMinutes,
+      };
+    }
+
     const paymentId = nid("pay");
     let stk;
     try {
@@ -473,10 +498,10 @@ export const startPayment = createServerFn({ method: "POST" })
     await sql`
       insert into payments (
         id, customer_id, package_id, checkout_request_id, merchant_request_id,
-        phone, amount, status, activation_status, site_id
+        phone, amount, status, activation_status, site_id, device_token
       ) values (
         ${paymentId}, ${customerId}, ${pkg.id}, ${stk.checkoutRequestId},
-        ${stk.merchantRequestId}, ${phone}, ${pkg.price}, 'PENDING', 'NOT_ACTIVATED', ${paySiteId}
+        ${stk.merchantRequestId}, ${phone}, ${pkg.price}, 'PENDING', 'NOT_ACTIVATED', ${paySiteId}, ${data.token}
       )
     `;
 
@@ -1004,6 +1029,55 @@ export const signOut = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+const SHARE_CODE_TTL_MIN = 10;
+async function hashShareCode(customerId: string, code: string) {
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(`${customerId}:${code}`).digest("hex");
+}
+
+/**
+ * Phone A's side of "share my package": a one-time 6-digit code, made on a device that is
+ * already part of the package (never from a phone number alone), valid for a few minutes.
+ * The other phone must enter the number AND this code, so guessing a number is not enough.
+ */
+export const createShareCode = createServerFn({ method: "POST" })
+  .validator((data: unknown) => z.object({ token: z.string().min(8).max(80) }).parse(data))
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    // Only a device that is bound to (or is the registered device of) a RUNNING package may share it.
+    const owner = await sql<{ customer_id: string; cp_id: string; max_devices: number; bound: number }>`
+      select cp.customer_id, cp.id as cp_id, pkg.max_devices,
+             (select count(*)::int from customer_package_devices d where d.customer_package_id = cp.id) as bound
+      from customer_packages cp
+      join packages pkg on pkg.id = cp.package_id
+      join customers c on c.id = cp.customer_id
+      where cp.status = 'ACTIVE' and cp.expiry_time > now()
+        and (
+          c.device_token = ${data.token}
+          or cp.id in (select customer_package_id from customer_package_devices where device_token = ${data.token})
+        )
+      order by cp.expiry_time desc
+      limit 1
+    `;
+    const o = owner[0];
+    if (!o) return { ok: false as const, error: "This device has no running package to share." };
+    if (Number(o.max_devices) < 2) {
+      return { ok: false as const, error: "This package is for one device only. A 2-device package is needed to share." };
+    }
+    if (Number(o.bound) >= Number(o.max_devices)) {
+      return { ok: false as const, error: "All device slots of this package are in use." };
+    }
+    const { randomInt } = await import("node:crypto");
+    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    await sql`delete from device_share_codes where customer_id = ${o.customer_id} and used_at is null`;
+    await sql`
+      insert into device_share_codes (id, customer_id, customer_package_id, code_hash, expires_at)
+      values (${nid("shc")}, ${o.customer_id}, ${o.cp_id}, ${await hashShareCode(o.customer_id, code)},
+              now() + (${SHARE_CODE_TTL_MIN} * interval '1 minute'))
+    `;
+    return { ok: true as const, code, minutes: SHARE_CODE_TTL_MIN };
+  });
+
 /**
  * Phone B's side of "share my package": enter the host's phone number and,
  * if their package has a free device slot, this device joins it. Reuses
@@ -1015,6 +1089,7 @@ export const joinHostPackage = createServerFn({ method: "POST" })
     z
       .object({
         hostPhone: z.string().min(9).max(15),
+        code: z.string().regex(/^\d{6}$/, "Enter the 6-digit code from the host's phone."),
         token: z.string().min(8),
         deviceInfo: z.string().optional(),
       })
@@ -1026,12 +1101,48 @@ export const joinHostPackage = createServerFn({ method: "POST" })
       return { ok: false as const, error: "Enter a valid phone number." };
     }
     const sql = await getSql();
+    // Brute-force limits: a 6-digit code only protects the host if guesses are scarce.
+    const tokenKey = `JOIN:${data.token.slice(0, 24)}`;
+    const failed = await sql<{ by_phone: number; by_device: number }>`
+      select
+        count(*) filter (where phone = ${p} and transaction_id like 'JOIN%')::int as by_phone,
+        count(*) filter (where transaction_id = ${tokenKey})::int as by_device
+      from recovery_attempts
+      where success = false and created_at > now() - interval '15 minutes'
+    `;
+    if (Number(failed[0]?.by_phone ?? 0) >= 5 || Number(failed[0]?.by_device ?? 0) >= 8) {
+      return { ok: false as const, error: "Too many wrong codes. Please wait 15 minutes and try again." };
+    }
     const host = await sql<{ id: string; status: string }>`
       select id, status from customers where phone = ${p} limit 1
     `;
-    if (!host[0]) {
-      return { ok: false as const, error: "No account found for that number." };
+    const wrong = "That number or code is wrong, or the code has expired. Ask the host to open Your package → Share code on their phone.";
+    let codeOk = false;
+    let sharedPackageId: string | null = null;
+    if (host[0]) {
+      const rows = await sql<{ id: string; code_hash: string; customer_package_id: string | null }>`
+        select id, code_hash, customer_package_id from device_share_codes
+        where customer_id = ${host[0].id} and used_at is null and expires_at > now()
+        order by created_at desc limit 1
+      `;
+      const want = rows[0]?.code_hash;
+      const got = await hashShareCode(host[0].id, data.code);
+      const { timingSafeEqual } = await import("node:crypto");
+      codeOk = Boolean(want) && want.length === got.length && timingSafeEqual(Buffer.from(want), Buffer.from(got));
+      if (codeOk) {
+        // one use only, claimed atomically so two phones cannot share one code
+        const claimed = await sql<{ id: string }>`
+          update device_share_codes set used_at = now() where id = ${rows[0].id} and used_at is null returning id
+        `;
+        codeOk = claimed.length > 0;
+        if (codeOk) sharedPackageId = rows[0].customer_package_id;
+      }
     }
+    await sql`
+      insert into recovery_attempts (id, phone, transaction_id, success)
+      values (${nid("rec")}, ${p}, ${tokenKey}, ${codeOk})
+    `;
+    if (!host[0] || !codeOk) return { ok: false as const, error: wrong };
     if (host[0].status === "BLOCKED") {
       return { ok: false as const, error: "That account is blocked." };
     }
@@ -1080,6 +1191,7 @@ export const joinHostPackage = createServerFn({ method: "POST" })
     const res = await reconnectCustomer(hostId, {
       token: data.token,
       info: data.deviceInfo ?? "Captive portal (joined)",
+      packageId: sharedPackageId,
     });
     if (!res.ok) {
       const message =

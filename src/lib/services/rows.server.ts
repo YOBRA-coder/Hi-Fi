@@ -95,6 +95,8 @@ export function mapSettings(row: SqlRow): Settings {
       row.one_device_per_package == null
         ? true
         : asBool(row.one_device_per_package),
+    parallelDevicePackages:
+      row.parallel_device_packages == null ? true : asBool(row.parallel_device_packages),
     maxDevicesPerPackage: asNumber(row.max_devices_per_package, 1),
     maintenanceMode: asBool(row.maintenance_mode),
     maintenanceMessage: row.maintenance_message ? String(row.maintenance_message) : null,

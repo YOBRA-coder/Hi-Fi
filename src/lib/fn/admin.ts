@@ -589,17 +589,17 @@ export const customerAction = createServerFn({ method: "POST" })
       for (const s of ses) await disconnectSession(s.id);
       // Also kick the login on the router itself, in case the local session
       // record is missing or stale.
-      const user = await sql<{ mikrotik_username: string | null }>`
-        select mikrotik_username from customer_packages
+      const users = await sql<{ mikrotik_username: string }>`
+        select distinct mikrotik_username from customer_packages
         where customer_id = ${data.customerId} and status = 'ACTIVE' and mikrotik_username is not null
-        order by expiry_time desc limit 1
       `;
       let routerKick = false;
-      if (user[0]?.mikrotik_username) {
-        routerKick = await disconnectUser(user[0].mikrotik_username).then(
+      for (const u of users) {
+        const ok = await disconnectUser(u.mikrotik_username).then(
           () => true,
           () => false,
         );
+        routerKick = routerKick || ok;
       }
       if (ses.length === 0 && !routerKick) {
         return { ok: false as const, error: "This customer isn't connected right now." };
@@ -1311,6 +1311,7 @@ export const saveSettingsAdmin = createServerFn({ method: "POST" })
         perUserMaxKbps: z.number().int().min(256).max(100_000),
         maxUsers: z.number().int().min(1).max(500),
         oneDevicePerPackage: z.boolean(),
+        parallelDevicePackages: z.boolean().optional(),
         maxDevicesPerPackage: z.union([z.literal(1), z.literal(2)]).optional(),
         maintenanceMode: z.boolean().optional(),
         maintenanceMessage: z.string().max(300).nullable().optional(),
@@ -1361,6 +1362,7 @@ export const saveSettingsAdmin = createServerFn({ method: "POST" })
         per_user_max_kbps = ${data.perUserMaxKbps},
         max_users = ${data.maxUsers},
         one_device_per_package = ${data.oneDevicePerPackage},
+        parallel_device_packages = ${data.parallelDevicePackages ?? true},
         max_devices_per_package = ${data.maxDevicesPerPackage ?? 1},
         maintenance_mode = ${data.maintenanceMode ?? false},
         maintenance_message = ${data.maintenanceMessage ?? null},

@@ -60,6 +60,7 @@ function SettingsPage() {
     perUserMaxKbps: 5120,
     maxUsers: 25,
     oneDevicePerPackage: true,
+    parallelDevicePackages: true,
     maxDevicesPerPackage: 1 as 1 | 2,
     maintenanceMode: false,
     maintenanceMessage: "",
@@ -106,6 +107,7 @@ function SettingsPage() {
       perUserMaxKbps: q.data.perUserMaxKbps,
       maxUsers: q.data.maxUsers,
       oneDevicePerPackage: q.data.oneDevicePerPackage,
+      parallelDevicePackages: q.data.parallelDevicePackages ?? true,
       maxDevicesPerPackage: q.data.maxDevicesPerPackage >= 2 ? 2 : 1,
       maintenanceMode: q.data.maintenanceMode,
       maintenanceMessage: q.data.maintenanceMessage ?? "",
@@ -364,6 +366,14 @@ function SettingsPage() {
           checked={form.oneDevicePerPackage}
           onCheckedChange={(v) => setForm({ ...form, oneDevicePerPackage: v })}
         />
+        {form.oneDevicePerPackage ? (
+          <Toggle
+            label="Separate time for each device (parallel mode)"
+            hint="When the same phone number pays again from a DIFFERENT device while a package is running, the new package starts right away on its own login and its own timer, instead of waiting in the queue behind the first. A repeat purchase from the SAME device still queues. Turn this off to always queue."
+            checked={form.parallelDevicePackages}
+            onCheckedChange={(v) => setForm({ ...form, parallelDevicePackages: v })}
+          />
+        ) : null}
         {form.oneDevicePerPackage ? (
           <p className="text-xs text-subtle">
             How many devices each package allows (1 or 2) is set per package

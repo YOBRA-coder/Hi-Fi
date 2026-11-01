@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { PortalShell } from "@/components/portal/portal-shell";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,7 @@ import { formatPhoneDisplay } from "@/lib/phone";
 import { formatRemaining, formatSpeed, formatStamp } from "@/lib/format";
 import { APP_NAME } from "@/lib/brand-copy";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
-import { getAccount } from "@/lib/fn/portal";
+import { createShareCode, getAccount } from "@/lib/fn/portal";
 
 export const Route = createFileRoute("/portal/account")({
   component: AccountPage,
@@ -30,6 +31,21 @@ function AccountPage() {
           customerId: device?.customerId ?? undefined,
         },
       }),
+  });
+  const [shareCode, setShareCode] = useState<{ code: string; minutes: number } | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const share = useMutation({
+    mutationFn: () => createShareCode({ data: { token: device!.token } }),
+    onSuccess: (r) => {
+      if (r.ok) {
+        setShareCode({ code: r.code, minutes: r.minutes });
+        setShareError(null);
+      } else {
+        setShareCode(null);
+        setShareError(r.error);
+      }
+    },
+    onError: () => setShareError("Could not create a code. Try again."),
   });
   const access = q.data?.access;
   const devices = q.data?.devices ?? [];
@@ -120,14 +136,34 @@ function AccountPage() {
                 </ul>
               ) : null}
               {devices.length < maxDevices ? (
-                <p className="mt-2 text-xs text-muted">
-                  Another phone can join by entering{" "}
-                  {formatPhoneDisplay(access.customer.phone)} on{" "}
-                  <Link to="/portal/add-device" className="text-accent">
-                    Add a device
-                  </Link>
-                  .
-                </p>
+                <div className="mt-2 text-xs text-muted">
+                  <p>
+                    To add another phone, tap Share code here, then on that phone open{" "}
+                    <Link to="/portal/add-device" className="text-accent">
+                      Add a device
+                    </Link>{" "}
+                    and enter {formatPhoneDisplay(access.customer.phone)} with the code.
+                  </p>
+                  {shareCode ? (
+                    <p className="mt-2 text-center font-display text-3xl font-semibold tracking-[0.3em] text-fg">
+                      {shareCode.code}
+                      <span className="mt-1 block text-xs font-normal tracking-normal text-subtle">
+                        One use · expires in {shareCode.minutes} minutes
+                      </span>
+                    </p>
+                  ) : null}
+                  {shareError ? <p className="mt-2 text-danger">{shareError}</p> : null}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-2 w-full"
+                    disabled={share.isPending}
+                    onClick={() => share.mutate()}
+                  >
+                    {shareCode ? "New code" : "Share code"}
+                  </Button>
+                </div>
               ) : null}
             </div>
           ) : null}

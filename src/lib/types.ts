@@ -90,6 +90,8 @@ export type Settings = {
   perUserMaxKbps: number;
   maxUsers: number;
   oneDevicePerPackage: boolean;
+  /** A package bought from another device starts at once on its own login instead of queueing. */
+  parallelDevicePackages: boolean;
   maxDevicesPerPackage: number;
   maintenanceMode: boolean;
   maintenanceMessage: string | null;

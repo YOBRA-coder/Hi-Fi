@@ -323,6 +323,14 @@ export async function apiUpsertHotspotUser(
       ],
     ]);
   }
+  // limit-uptime counts the user's TOTAL uptime: start every package from zero.
+  try {
+    const again = await apiCall(creds, [["/ip/hotspot/user/print", `?name=${input.username}`]]);
+    const id = again.find((r) => r.type === "re" && r.attrs.name === input.username)?.attrs[".id"];
+    if (id) await apiCall(creds, [["/ip/hotspot/user/reset-counters", `=numbers=${id}`]]);
+  } catch {
+    /* best-effort */
+  }
   // Best-effort: ensure one-device profile exists (ROS6)
   try {
     await apiCall(creds, [
