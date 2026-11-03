@@ -367,6 +367,10 @@ async function activateFromPaymentUnlocked(
   // MikroTik path below, unchanged.
   let hwAuth: Awaited<ReturnType<typeof authorizeOnHardware>> | null = null;
   let activationError = "";
+  // False only when a MikroTik login was attempted for this phone and did not happen. Then no
+  // "live" session is recorded (it would show in Live users with 0 traffic while the phone has
+  // no internet); pressing Connect on the portal retries the router login for this phone.
+  let routerLoginOk = true;
   try {
     const hwTarget = await resolveHardwareTarget({
       deviceToken: device?.token,
@@ -412,6 +416,7 @@ async function activateFromPaymentUnlocked(
           password,
         });
         if (!loggedIn) {
+          routerLoginOk = false;
           await logEvent(
             "HOTSPOT_LOGIN",
             `Hotspot user ${username} created but the phone was not logged in on the router (no MAC/IP from the router login page, or the router refused). The customer can press Connect.`,
@@ -555,6 +560,14 @@ async function activateFromPaymentUnlocked(
       where customer_id = ${pay.customer_id} and status = 'ACTIVE'
         and mikrotik_username = ${username}
     `;
+  }
+
+  if (!routerLoginOk) {
+    await sql`
+      update payments set activation_status = 'ACTIVATED', updated_at = now()
+      where id = ${paymentId}
+    `;
+    return { ok: true, pack: mapCustomerPackage(packRow) };
   }
 
   const sessionId = nid("ses");

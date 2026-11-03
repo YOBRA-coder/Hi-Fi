@@ -297,7 +297,16 @@ export async function loginMikrotikClient(opts: {
       deviceToken: opts.deviceToken,
       customerId: opts.customerId,
     });
-    if (!client || client.vendor !== "mikrotik" || !client.clientIp || !client.clientMac) return false;
+    if (!client || client.vendor !== "mikrotik" || !client.clientIp || !client.clientMac) {
+      console.error(
+        `[mikrotik] no router login for ${opts.username}: ${
+          !client
+            ? "no stored IP/MAC for this phone's browser (portal was not opened through the router login page, or the browser token changed)"
+            : `context incomplete (vendor=${client.vendor}, ip=${client.clientIp ?? "none"}, mac=${client.clientMac ?? "none"})`
+        }`,
+      );
+      return false;
+    }
     return await hotspotLoginDevice({
       routerId: client.routerId,
       username: opts.username,
@@ -306,7 +315,7 @@ export async function loginMikrotikClient(opts: {
       mac: client.clientMac,
     });
   } catch (err) {
-    console.error("[mikrotik] device login failed:", err instanceof Error ? err.message : err);
+    console.error(`[mikrotik] device login failed for ${opts.username}:`, err instanceof Error ? err.message : err);
     return false;
   }
 }
