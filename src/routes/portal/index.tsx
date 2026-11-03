@@ -64,18 +64,19 @@ function PortalHome() {
     if (access.otherDevice) {
       return (
         <PortalShell hotspotName={hotspot}>
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-danger">
-            Device limit
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-accent">
+            New device
           </p>
           <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight">
-            {PACKAGE_IN_USE_MESSAGE}
+            This phone has no package yet
           </h1>
           <p className="mt-4 text-sm leading-relaxed text-muted">
-            {access.pack.packageName} is already connected on another phone.
-            Ask the operator to release the device if this is your package.
+            This number has {access.pack.packageName} running on another phone.
+            Each phone needs its own package: buy one for this phone (the same
+            number is fine), or join the other phone's package if it has 2 devices.
           </p>
-          <Button asChild size="xl" className="mt-6 w-full" variant="secondary">
-            <Link to="/portal/packages">Buy a new package</Link>
+          <Button asChild size="xl" className="mt-6 w-full">
+            <Link to="/portal/packages">Buy a package for this phone</Link>
           </Button>
           <Link
             to="/portal/recover"

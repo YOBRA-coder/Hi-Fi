@@ -128,7 +128,9 @@ function ConnectPage() {
               !connect.data.ok &&
               "code" in connect.data &&
               connect.data.code === "in_use")) && (
-            <p className="mt-4 text-sm text-danger">{PACKAGE_IN_USE_MESSAGE}</p>
+            <p className="mt-4 text-sm text-danger">
+              {PACKAGE_IN_USE_MESSAGE} Buy a package for this phone, or use Already paid? with this phone's own M-Pesa receipt.
+            </p>
           )}
           {connect.data &&
             !connect.data.ok &&
@@ -137,7 +139,7 @@ function ConnectPage() {
           )}
           {access?.otherDevice ? (
             <Button asChild size="xl" className="mt-6 w-full" variant="secondary">
-              <Link to="/portal">Buy a new package</Link>
+              <Link to="/portal/packages">Buy a package for this phone</Link>
             </Button>
           ) : (
             <Button
