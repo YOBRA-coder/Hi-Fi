@@ -13,8 +13,13 @@ const DARJA_BASE: Record<string, string> = {
   production: "https://api.safaricom.co.ke",
 };
 
+const tokenCache = new Map<string, { token: string; until: number }>();
+
 async function darajaToken(key: string, secret: string, env: string) {
   const base = DARJA_BASE[env] ?? DARJA_BASE.sandbox;
+  const ck = `${env}|${key}|${secret.slice(-6)}`;
+  const hit = tokenCache.get(ck);
+  if (hit && hit.until > Date.now()) return { token: hit.token, base };
   const auth = Buffer.from(`${key}:${secret}`).toString("base64");
   const res = await fetch(
     `${base}/oauth/v1/generate?grant_type=client_credentials`,
@@ -25,6 +30,8 @@ async function darajaToken(key: string, secret: string, env: string) {
   if (!json.access_token) {
     throw new Error(json.errorMessage || "Could not reach M-Pesa. Check Daraja credentials.");
   }
+  // Safaricom tokens last an hour: reuse for 45 minutes instead of a fresh round trip per call.
+  tokenCache.set(ck, { token: json.access_token, until: Date.now() + 45 * 60_000 });
   return { token: json.access_token, base };
 }
 

@@ -2,6 +2,7 @@ import { getSql } from "@/lib/db";
 import { nid } from "@/lib/utils";
 import type { RouterProbe } from "@/lib/types";
 import { getSettingsSecret } from "./settings.server";
+import { recordRouterCall } from "./router-timing";
 import { normalizeRouterHost } from "@/lib/mikrotik-host";
 import {
   apiProbe,
@@ -144,6 +145,8 @@ async function hasLiveRouter() {
   return Boolean(creds);
 }
 
+let insecureAgent: import("undici").Agent | undefined;
+
 async function routeros(
   path: string,
   init: RequestInit = {},
@@ -166,11 +169,16 @@ async function routeros(
     signal: controller.signal,
   };
   if (c.insecureTls) {
-    const { Agent } = await import("undici");
-    initOut.dispatcher = new Agent({
+    // ONE long-lived agent: a new agent per request meant a fresh TCP + TLS handshake for every
+    // call, and an activation makes ~10 calls to a small router over the tunnel.
+    insecureAgent ??= new (await import("undici")).Agent({
       connect: { rejectUnauthorized: false },
+      keepAliveTimeout: 30_000,
+      keepAliveMaxTimeout: 60_000,
     });
+    initOut.dispatcher = insecureAgent;
   }
+  const startedAt = Date.now();
   try {
     const res = await fetch(`${host}${path}`, initOut);
     if (!res.ok) {
@@ -190,6 +198,7 @@ async function routeros(
     throw new MikroTikError();
   } finally {
     clearTimeout(timer);
+    recordRouterCall(Date.now() - startedAt);
   }
 }
 
@@ -333,6 +342,10 @@ async function ensureSpeedProfile(
   };
   if (opts.student) settings["address-list"] = "telnet-student";
 
+  // Already made/updated with exactly these settings by this process: skip the 2 router calls.
+  const cacheKey = `${creds.host}|${name}|${JSON.stringify(settings)}`;
+  if (profileCache.has(cacheKey)) return name;
+
   const profiles = (await routeros(
     "/rest/ip/hotspot/user/profile",
     {},
@@ -360,8 +373,12 @@ async function ensureSpeedProfile(
       creds,
     );
   }
+  profileCache.add(cacheKey);
   return name;
 }
+
+/** Profiles this process has already created/updated on a router (cleared if the router says one is missing). */
+const profileCache = new Set<string>();
 
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -530,18 +547,25 @@ export async function createAndActivateUser(input: HotspotUserInput) {
     payload["mac-address"] = input.macAddress;
   }
 
-  if (existing && existing[0]?.[".id"]) {
-    await routeros(
-      `/rest/ip/hotspot/user/${encodeURIComponent(existing[0][".id"])}`,
-      { method: "PATCH", body: JSON.stringify(payload) },
-      creds,
-    );
-  } else {
-    await routeros(
-      `/rest/ip/hotspot/user`,
-      { method: "PUT", body: JSON.stringify(payload) },
-      creds,
-    );
+  const existingId = existing?.[0]?.[".id"] ?? null;
+  try {
+    if (existingId) {
+      await routeros(
+        `/rest/ip/hotspot/user/${encodeURIComponent(existingId)}`,
+        { method: "PATCH", body: JSON.stringify(payload) },
+        creds,
+      );
+    } else {
+      await routeros(
+        `/rest/ip/hotspot/user`,
+        { method: "PUT", body: JSON.stringify(payload) },
+        creds,
+      );
+    }
+  } catch (err) {
+    // The cached profile may have been deleted on the router: forget the cache so the next attempt recreates it.
+    profileCache.clear();
+    throw err;
   }
 
   // limit-uptime is compared with the user's TOTAL uptime on the router, which keeps
@@ -549,20 +573,16 @@ export async function createAndActivateUser(input: HotspotUserInput) {
   // customer's new package is "already used up" on the router: the phone connects,
   // then gets no internet (or is cut off early). limit-uptime was set to the time
   // REMAINING from now, so counting from zero is exactly right.
-  await resetUserCounters(input.username, creds);
-  await kickExtraActiveSessions(input.username, creds);
+  // A brand-new user has nothing to reset. The two clean-ups are independent: run them together.
+  await Promise.all([
+    existingId ? resetUserCounters(existingId, creds) : Promise.resolve(),
+    kickExtraActiveSessions(input.username, creds),
+  ]);
   return { username: input.username };
 }
 
-async function resetUserCounters(username: string, creds: RouterCreds) {
+async function resetUserCounters(id: string, creds: RouterCreds) {
   try {
-    const rows = (await routeros(
-      `/rest/ip/hotspot/user?name=${encodeURIComponent(username)}`,
-      {},
-      creds,
-    )) as Array<{ ".id"?: string }> | null;
-    const id = rows?.[0]?.[".id"];
-    if (!id) return;
     await routeros(
       "/rest/ip/hotspot/user/reset-counters",
       { method: "POST", body: JSON.stringify({ ".id": id }) },

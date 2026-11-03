@@ -20,6 +20,7 @@ import {
 } from "./hardware";
 import { fmtLocal } from "./clock.server";
 import { singleFlight, type FlightMap } from "./single-flight";
+import { routerTiming, type RouterTiming } from "./router-timing";
 import { expireDuePackages } from "./expiry.server";
 import { awardLoyaltyForPayment, applyReferralMinutesForPayment } from "./loyalty.server";
 import { getSettings, logEvent } from "./settings.server";
@@ -39,6 +40,14 @@ function randomMac() {
   return `02:${b()}:${b()}:${b()}:${b()}:${b()}`.toUpperCase();
 }
 
+function timingNote(startedAt: number) {
+  const t: RouterTiming | undefined = routerTiming.getStore();
+  const total = ((Date.now() - startedAt) / 1000).toFixed(1);
+  return t
+    ? `Activation took ${total}s (router: ${t.calls} calls, ${(t.ms / 1000).toFixed(1)}s of waiting).`
+    : `Activation took ${total}s.`;
+}
+
 type ActivateResult = Awaited<ReturnType<typeof activateFromPaymentUnlocked>>;
 const activationFlights: FlightMap<ActivateResult> = new Map();
 
@@ -55,9 +64,11 @@ export function activateFromPayment(
   device?: Parameters<typeof activateFromPaymentUnlocked>[1],
   opts?: { promote?: boolean },
 ): Promise<ActivateResult> {
-  if (opts?.promote) return activateFromPaymentUnlocked(paymentId, device, opts);
+  if (opts?.promote) {
+    return routerTiming.run({ calls: 0, ms: 0 }, () => activateFromPaymentUnlocked(paymentId, device, opts));
+  }
   return singleFlight(activationFlights, paymentId, device?.token ?? "", () =>
-    activateFromPaymentUnlocked(paymentId, device, opts),
+    routerTiming.run({ calls: 0, ms: 0 }, () => activateFromPaymentUnlocked(paymentId, device, opts)),
   );
 }
 
@@ -83,6 +94,7 @@ async function activateFromPaymentUnlocked(
   | { ok: true; pack: CustomerPackage; queued?: boolean }
   | { ok: false; reason: string }
 > {
+  const startedAt = Date.now();
   await expireDuePackages();
   const sql = await getSql();
 
@@ -556,7 +568,7 @@ async function activateFromPaymentUnlocked(
 
   await logEvent(
     "ACTIVATED",
-    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${fmtLocal(expiry)}. Speed limit on router: ${downloadKbps}k down / ${uploadKbps}k up.`,
+    `Hotspot user ${username} activated for ${String(pay.phone)}. Package ${String(pay.package_name)} until ${fmtLocal(expiry)}. Speed limit on router: ${downloadKbps}k down / ${uploadKbps}k up. ${timingNote(startedAt)}`,
   );
 
   return { ok: true, pack: mapCustomerPackage(packRow) };

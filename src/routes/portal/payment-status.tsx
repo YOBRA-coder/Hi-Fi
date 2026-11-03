@@ -27,8 +27,16 @@ function PaymentStatusPage() {
     enabled: Boolean(paymentId),
     queryFn: () => getPaymentStatus({ data: { paymentId } }),
     refetchInterval: (query) => {
-      const status = query.state.data?.ok ? query.state.data.payment.status : null;
+      const d = query.state.data;
+      const status = d?.ok ? d.payment.status : null;
       if (status === "PENDING") return 3000;
+      // Paid, but the router login is still being set up: keep checking (cheap, database only)
+      // so the page moves on by itself the moment the phone is online.
+      if (status === "SUCCESS" && d?.ok) {
+        const act = d.payment.activationStatus;
+        const waiting = act === "NOT_ACTIVATED" || (act === "ACTIVATED" && !d.access?.connected);
+        if (waiting && query.state.dataUpdateCount < 60) return 1500;
+      }
       return false;
     },
   });
