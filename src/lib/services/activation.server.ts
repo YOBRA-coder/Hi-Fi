@@ -210,7 +210,10 @@ async function activateFromPaymentUnlocked(
     if (mine.length > 0) {
       queueScopeUsernames = [...new Set(mine.map((r) => String(r.mikrotik_username)))];
       chosenUsername = queueScopeUsernames[0];
-    } else if (running.length > 0 && running.every((r) => r.has_bound)) {
+    } else if (running.some((r) => r.has_bound)) {
+      // Some package is held by another device and none is held by this one: this device gets its own login now.
+      // (Previously EVERY running row had to be bound, so one queued/failed/unbound row made the purchase queue
+      // behind the first device and the new device was then blocked as "in use".)
       const taken = new Set(running.map((r) => String(r.mikrotik_username ?? "")));
       const base = usernameForPhone(String(pay.phone));
       let n = 2;
@@ -590,6 +593,12 @@ export async function reconnectCustomer(
       and cp.expiry_time > now()
       and (${device?.packageId ?? null}::text is null or cp.id = ${device?.packageId ?? null}::text)
     order by (cp.id in (select customer_package_id from customer_package_devices where device_token = ${device?.token ?? null}::text)) desc,
+             -- a package THIS device paid for that nobody holds yet (failed/queued-then-promoted) beats someone else's
+             (cp.payment_id in (select id from payments where device_token = ${device?.token ?? null}::text)
+               and not exists (select 1 from customer_package_devices d where d.customer_package_id = cp.id)) desc,
+             -- then any package that still has a free device slot, before a full one
+             ((select count(*) from customer_package_devices d where d.customer_package_id = cp.id)
+               < (case when pkg.max_devices >= 2 then 2 else 1 end)) desc,
              cp.expiry_time desc
     limit 1
   `;

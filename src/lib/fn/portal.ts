@@ -131,6 +131,10 @@ async function findActiveForCustomer(
       and cp.status = 'ACTIVE'
       and cp.expiry_time > now()
     order by (cp.id in (select customer_package_id from customer_package_devices where device_token = ${deviceToken ?? null}::text)) desc,
+             (cp.payment_id in (select id from payments where device_token = ${deviceToken ?? null}::text)
+               and not exists (select 1 from customer_package_devices d where d.customer_package_id = cp.id)) desc,
+             ((select count(*) from customer_package_devices d where d.customer_package_id = cp.id)
+               < (case when pkg.max_devices >= 2 then 2 else 1 end)) desc,
              cp.expiry_time desc
     limit 1
   `;
