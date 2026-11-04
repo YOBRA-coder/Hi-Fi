@@ -20,7 +20,7 @@ const COMPANIONS: Record<string, string[]> = {
   "twitter.com": ["x.com", "twimg.com", "t.co", "ads-twitter.com"],
   "facebook.com": ["fb.com", "fbcdn.net", "facebook.net", "fbsbx.com", "fb.me", "messenger.com", "fbpigeon.com"],
   "instagram.com": ["cdninstagram.com", "instagr.am", "fbcdn.net", "ig.me"],
-  "youtube.com": ["youtu.be", "googlevideo.com", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com", "ggpht.com"],
+  "youtube.com": ["youtu.be", "googlevideo.com", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com", "youtube.googleapis.com", "ggpht.com"],
   "netflix.com": ["nflxvideo.net", "nflximg.net", "nflxext.com", "nflxso.net", "netflix.net"],
   "snapchat.com": ["sc-cdn.net", "snap-dev.net", "snapkit.com", "feelinsonice.com", "snapads.com"],
 };

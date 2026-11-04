@@ -22,10 +22,11 @@ import { probeStoredRouter } from "@/lib/services/hardware";
 import {
   getRouterCredentialsById,
   probeRouter,
+  syncStudentBlock,
   type RouterCreds,
 } from "@/lib/services/mikrotik.server";
 import { resumeEligiblePackages } from "@/lib/services/resume.server";
-import { logEvent } from "@/lib/services/settings.server";
+import { getSettings, logEvent } from "@/lib/services/settings.server";
 
 export const MIN_OUTAGE_MS = 3 * 60_000;
 export const MAX_CREDIT_MS = 72 * 3_600_000;
@@ -210,6 +211,8 @@ export async function probeAllRouters(): Promise<number> {
     // health current without anyone having the Network map open.
     await refreshNetworkLive({ maxAgeMs: 45_000 });
     await sampleApUsage();
+    // Student packages: re-check the domain block on each router (throttled inside).
+    await healStudentBlocks().catch((e) => console.error("[student-block]", e));
     // Omada sites: same sampling, keyed by the AP MAC the controller reports.
     const hw = await import("./hardware/ap.server");
     await hw.sampleHwApUsage();
@@ -232,4 +235,19 @@ export async function probeAllRouters(): Promise<number> {
     console.error("[hours]", err);
   }
   return n;
+}
+
+/** Re-apply the student domain block wherever it has gone missing or been pushed down the rule list. */
+async function healStudentBlocks(): Promise<void> {
+  const domains = (await getSettings()).studentBlockedDomains
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+  if (domains.length === 0) return;
+  const sql = await getSql();
+  const routers = await sql<{ id: string }>`select id from mikrotiks where hardware_type = 'mikrotik'`;
+  for (const r of routers) {
+    const creds = await getRouterCredentialsById(String(r.id));
+    if (creds) await syncStudentBlock(creds, domains);
+  }
 }

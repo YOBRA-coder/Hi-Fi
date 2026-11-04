@@ -162,10 +162,17 @@ export async function checkAccessPoint(
   const portClients = ap.port ? (live.ports.find((p) => p.name === ap.port)?.clients ?? 0) : null;
   if (live.error) return { status: "UNKNOWN", latencyMs: null, clients: null };
   if (ap.ip_address) {
-    const r = await rosPing(creds, ap.ip_address);
+    // 4 pings, not 2: cheap APs (Tenda, TP-Link...) answer ICMP at low priority, so one slow or
+    // lost reply out of two used to flip a perfectly working AP to WARNING.
+    const r = await rosPing(creds, ap.ip_address, 4);
     if (!r.ok) return { status: "OFFLINE", latencyMs: null, clients: portClients };
-    const slow = (r.avgMs ?? 0) >= 200;
-    return { status: r.lossPct > 0 || slow ? "WARNING" : "ONLINE", latencyMs: r.avgMs != null ? Math.round(r.avgMs) : null, clients: portClients };
+    const ms = r.avgMs != null ? Math.round(r.avgMs) : null;
+    // Customers connected through the AP prove it is serving traffic, whatever its ping says.
+    // Only a really lossy or really slow link to an AP with nobody on it is worth a warning.
+    const serving = (portClients ?? 0) > 0;
+    const lossy = r.lossPct >= (serving ? 75 : 50);
+    const slow = !serving && (r.avgMs ?? 0) >= 1000;
+    return { status: lossy || slow ? "WARNING" : "ONLINE", latencyMs: ms, clients: portClients };
   }
   if (ap.mac_address) {
     const seen = live.neighbors.some((n) => n.mac === ap.mac_address!.toUpperCase());

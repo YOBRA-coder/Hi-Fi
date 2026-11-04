@@ -385,8 +385,13 @@ const profileCache = new Set<string>();
 const STUDENT_PREFIX = "telnet-student:";
 const STUDENT_CHAIN = "telnet-student-block";
 
-/** router host -> signature of the domain list already applied (skips ~100 REST calls per activation). */
-const studentBlockCache = new Map<string, string>();
+/**
+ * router host -> domain-list signature + when it was last verified. A hit skips ~100 REST calls per
+ * activation, but only for a few minutes: the old "remember forever" cache meant a router that was
+ * reset, edited by hand, or got a new firewall rule above ours was never fixed until the app restarted.
+ */
+const studentBlockCache = new Map<string, { signature: string; at: number }>();
+const STUDENT_BLOCK_RECHECK_MS = 5 * 60_000;
 
 type FilterRow = { ".id"?: string; chain?: string; comment?: string; dynamic?: string };
 
@@ -417,7 +422,8 @@ async function ensureStudentDomainBlock(creds: RouterCreds, domains: string[]) {
   const expanded = expandBlockedDomains(domains);
   if (expanded.length === 0) return;
   const signature = expanded.join(",");
-  if (studentBlockCache.get(creds.host) === signature) return;
+  const seen = studentBlockCache.get(creds.host);
+  if (seen && seen.signature === signature && Date.now() - seen.at < STUDENT_BLOCK_RECHECK_MS) return;
 
   try {
     const topRules = [
@@ -507,10 +513,32 @@ async function ensureStudentDomainBlock(creds: RouterCreds, domains: string[]) {
         }
       }
     }
-    studentBlockCache.set(creds.host, signature);
+    studentBlockCache.set(creds.host, { signature, at: Date.now() });
   } catch (err) {
     // Still best-effort (activation must not fail over it), but never silent.
     console.error("[student-block] could not apply domain block on", creds.host, err);
+  }
+}
+
+/** router host -> last time the background job looked for student profiles (throttle). */
+const studentSyncChecked = new Map<string, number>();
+
+/**
+ * Background self-heal for the student domain block. Called from the minute tick: every few minutes,
+ * on each router that has a student profile, make sure our firewall rules still exist and still sit
+ * above the router's own forward rules. Costs one cheap read when nothing changed.
+ */
+export async function syncStudentBlock(creds: RouterCreds, domains: string[]): Promise<void> {
+  if (creds.apiMode === "api6") return; // the block is written through REST
+  const last = studentSyncChecked.get(creds.host) ?? 0;
+  if (Date.now() - last < STUDENT_BLOCK_RECHECK_MS) return;
+  studentSyncChecked.set(creds.host, Date.now());
+  try {
+    const profiles = (await routeros("/rest/ip/hotspot/user/profile", {}, creds)) as Array<{ name?: string }> | null;
+    if (!(profiles ?? []).some((p) => p.name?.startsWith("telnet-student"))) return;
+    await ensureStudentDomainBlock(creds, domains);
+  } catch (err) {
+    console.error("[student-block] background check failed on", creds.host, err);
   }
 }
 
@@ -1232,7 +1260,7 @@ export async function rosList(creds: RouterCreds, path: string): Promise<Array<R
 export type PingResult = { ok: boolean; lossPct: number; avgMs: number | null };
 
 /** Ping an address FROM the router (so it works for APs on private LAN ranges). */
-export async function rosPing(creds: RouterCreds, address: string): Promise<PingResult> {
+export async function rosPing(creds: RouterCreds, address: string, count = 2): Promise<PingResult> {
   const summarize = (rows: Array<Record<string, string>>): PingResult => {
     const last = rows[rows.length - 1] ?? {};
     const sent = Number(last.sent ?? rows.length) || 0;
@@ -1246,14 +1274,14 @@ export async function rosPing(creds: RouterCreds, address: string): Promise<Ping
     if (creds.apiMode === "api6") {
       const rows = await apiCall(
         { host: creds.host, port: creds.apiPort || 8728, user: creds.user, password: creds.password },
-        [["/ping", `=address=${address}`, "=count=2"]],
+        [["/ping", `=address=${address}`, `=count=${count}`]],
         9000,
       );
       return summarize(rows.filter((r) => r.type === "re").map((r) => ({ ...r.attrs }) as Record<string, string>));
     }
     const out = await routeros(
       "/rest/ping",
-      { method: "POST", body: JSON.stringify({ address, count: "2" }) },
+      { method: "POST", body: JSON.stringify({ address, count: String(count) }) },
       creds,
     );
     return summarize(Array.isArray(out) ? (out as Array<Record<string, string>>) : []);
