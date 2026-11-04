@@ -610,25 +610,53 @@ export async function hotspotLoginDevice(input: {
     ? await getRouterCredentialsById(input.routerId)
     : await getRouterCredentials();
   if (!creds || creds.apiMode === "api6") return false;
-  // A stale session for the same address would make the login fail as "already logged in".
+  const normMac = (m: unknown) => String(m ?? "").toLowerCase().replace(/[^0-9a-f]/g, "");
+  const mac = String(input.mac).toUpperCase().replace(/-/g, ":");
+  const macKey = normMac(mac);
+  let ip = input.ip;
+
+  // The router's own host table is the truth about where THIS phone is right now. The IP saved
+  // when the phone opened the login page can be stale (DHCP renewed, phone reconnected), and a
+  // login on a stale address succeeds on the router but the phone never gets internet.
   try {
-    const old = (await routeros(
-      `/rest/ip/hotspot/active?address=${encodeURIComponent(input.ip)}`,
+    const hosts = (await routeros(
+      `/rest/ip/hotspot/host?mac-address=${encodeURIComponent(mac)}`,
       {},
       creds,
-    )) as Array<{ ".id"?: string }> | null;
-    for (const row of old ?? []) {
-      if (row[".id"]) {
-        await routeros(
-          `/rest/ip/hotspot/active/${encodeURIComponent(row[".id"])}`,
-          { method: "DELETE" },
-          creds,
-        );
-      }
+    )) as Array<{ address?: string; "to-address"?: string }> | null;
+    const live = (hosts ?? []).map((h) => String(h.address ?? "")).filter(Boolean);
+    if (live.length > 0 && !live.includes(ip)) {
+      console.warn(`[mikrotik] ${mac} is at ${live[0]} on the router, not ${ip}; logging in there`);
+      ip = live[0];
+    }
+  } catch {
+    /* host table not readable: use the saved IP */
+  }
+
+  // Clear only THIS phone's own stale sessions (same MAC, or same address when it is the same MAC).
+  // Never kick another phone that merely holds a similar address.
+  try {
+    const [byMac, byIp] = await Promise.all([
+      routeros(`/rest/ip/hotspot/active?mac-address=${encodeURIComponent(mac)}`, {}, creds),
+      routeros(`/rest/ip/hotspot/active?address=${encodeURIComponent(ip)}`, {}, creds),
+    ]);
+    const rows = [
+      ...(((byMac as Array<Record<string, unknown>> | null) ?? [])),
+      ...(((byIp as Array<Record<string, unknown>> | null) ?? []).filter(
+        (r) => normMac(r["mac-address"]) === macKey,
+      )),
+    ];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const id = String(row[".id"] ?? "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      await routeros(`/rest/ip/hotspot/active/${encodeURIComponent(id)}`, { method: "DELETE" }, creds);
     }
   } catch {
     /* nothing to clear */
   }
+
   await routeros(
     "/rest/ip/hotspot/active/login",
     {
@@ -636,12 +664,29 @@ export async function hotspotLoginDevice(input: {
       body: JSON.stringify({
         user: input.username,
         password: input.password,
-        ip: input.ip,
-        "mac-address": input.mac,
+        ip,
+        "mac-address": mac,
       }),
     },
     creds,
   );
+
+  // Make sure the router really holds a session for this phone now.
+  try {
+    const act = (await routeros(
+      `/rest/ip/hotspot/active?user=${encodeURIComponent(input.username)}`,
+      {},
+      creds,
+    )) as Array<{ "mac-address"?: string; address?: string }> | null;
+    const mine = (act ?? []).some((a) => normMac(a["mac-address"]) === macKey);
+    if (!mine) {
+      console.error(`[mikrotik] login for ${input.username} sent for ${ip}/${mac} but no active session appeared`);
+      return false;
+    }
+    console.info(`[mikrotik] ${input.username} logged in on router at ${ip}/${mac}`);
+  } catch {
+    /* cannot verify: trust the login call */
+  }
   return true;
 }
 
