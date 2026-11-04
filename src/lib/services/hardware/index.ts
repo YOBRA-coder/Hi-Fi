@@ -26,7 +26,7 @@ import {
 } from "../mikrotik.server";
 import { omadaDriver } from "./omada.driver";
 import { ruijieDriver } from "./ruijie.driver";
-import { findClientContext } from "./context.server";
+import { findClientContext, adoptMacIdentity } from "./context.server";
 import {
   HardwareError,
   emptyProbe,
@@ -41,6 +41,7 @@ export type { HwRouter, ClientContext } from "./types";
 export {
   bindClientContext,
   findClientContext,
+  adoptMacIdentity,
   normMac,
   saveClientContext,
 } from "./context.server";

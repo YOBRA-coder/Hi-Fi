@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { bindHardwareClient, getPortalCatalog } from "@/lib/fn/portal";
-import { readDevice } from "@/lib/device";
+import { patchDevice, readDevice } from "@/lib/device";
 
 export const Route = createFileRoute("/portal")({
   // ?site=<slug> on the router's portal link scopes the package list to that site.
@@ -20,7 +20,14 @@ function PortalLayout() {
   useEffect(() => {
     if (!hwc) return;
     const device = readDevice();
-    void bindHardwareClient({ data: { token: device.token, ctx: hwc } }).catch(() => {});
+    void bindHardwareClient({ data: { token: device.token, ctx: hwc } })
+      .then((r) => {
+        if (r.token && r.token !== device.token) {
+          patchDevice({ token: r.token });
+          window.location.reload(); // restart once with this phone's stable identity
+        }
+      })
+      .catch(() => {});
   }, [hwc]);
   return <Outlet />;
 }

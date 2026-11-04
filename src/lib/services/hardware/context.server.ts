@@ -57,6 +57,47 @@ export async function bindClientContext(ctxId: string, deviceToken: string): Pro
   return rows.length > 0;
 }
 
+/**
+ * MikroTik phones: the router hands us the phone's real MAC on every login-page visit, so the MAC
+ * is the one identity that survives a captive-portal browser that forgets its storage. The
+ * browser token becomes "mac_<mac>" and any packages / payments / contexts that belonged to its
+ * old random token move over with it.
+ */
+export async function adoptMacIdentity(ctxId: string, oldToken: string): Promise<string | null> {
+  if (!/^hwc_[0-9a-f]{24}$/.test(ctxId)) return null;
+  const sql = await getSql();
+  const r = await sql<{ mac_norm: string; vendor: string }>`
+    select mac_norm, vendor from hw_clients where id = ${ctxId} limit 1
+  `;
+  const row = r[0];
+  if (!row || row.vendor !== "mikrotik" || !/^[0-9a-f]{12}$/.test(row.mac_norm)) return null;
+  const next = `mac_${row.mac_norm}`;
+  if (oldToken && oldToken !== next && !oldToken.startsWith("mac_")) {
+    const moves: Array<() => Promise<unknown>> = [
+      () => sql`update customers set device_token = ${next} where device_token = ${oldToken}`,
+      () => sql`update payments set device_token = ${next} where device_token = ${oldToken}`,
+      () => sql`
+        update customer_package_devices set device_token = ${next}
+        where device_token = ${oldToken}
+          and not exists (
+            select 1 from customer_package_devices d2
+            where d2.customer_package_id = customer_package_devices.customer_package_id
+              and d2.device_token = ${next}
+          )`,
+      () => sql`update hw_clients set device_token = ${next} where device_token = ${oldToken}`,
+    ];
+    for (const run of moves) {
+      try {
+        await run();
+      } catch (err) {
+        console.error("[identity] move failed:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+  await sql`update hw_clients set device_token = ${next}, seen_at = now() where id = ${ctxId}`;
+  return next;
+}
+
 function mapContext(r: Record<string, unknown>): ClientContext {
   let extra: Record<string, string> = {};
   try {
@@ -98,6 +139,17 @@ export async function findClientContext(opts: {
     token = c[0]?.device_token ?? null;
   }
   if (!token) return null;
+  // A MAC-based identity finds that phone's latest router visit directly.
+  const macRows = /^mac_[0-9a-f]{12}$/.test(token)
+    ? await sql<Record<string, unknown>>`
+        select * from hw_clients
+        where mac_norm = ${token.slice(4)}
+          and seen_at > now() - (${CONTEXT_TTL_DAYS}::int * interval '1 day')
+        order by seen_at desc
+        limit 1
+      `
+    : [];
+  if (macRows[0]) return mapContext(macRows[0]);
   const rows = await sql<Record<string, unknown>>`
     select * from hw_clients
     where device_token = ${token}

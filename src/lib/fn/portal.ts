@@ -37,7 +37,7 @@ import {
 import type { ActiveAccess, Package } from "@/lib/types";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
 import { isInternetUp } from "@/lib/services/capacity.server";
-import { bindClientContext, takeHandoffUrl } from "@/lib/services/hardware";
+import { adoptMacIdentity, bindClientContext, takeHandoffUrl } from "@/lib/services/hardware";
 
 const identitySchema = z.object({
   token: z.string().min(8).max(80),
@@ -1280,7 +1280,12 @@ export const bindHardwareClient = createServerFn({ method: "POST" })
   .validator((data: unknown) =>
     z.object({ token: z.string().min(8).max(200), ctx: z.string().min(8).max(80) }).parse(data),
   )
-  .handler(async ({ data }) => ({ ok: await bindClientContext(data.ctx, data.token) }));
+  .handler(async ({ data }) => {
+    // MikroTik: the phone's MAC becomes its identity (stable across popup sessions).
+    const token = await adoptMacIdentity(data.ctx, data.token).catch(() => null);
+    if (token) return { ok: true, token };
+    return { ok: await bindClientContext(data.ctx, data.token), token: null as string | null };
+  });
 
 /**
  * Ruijie only: after payment the browser must visit the gateway's auth URL once
