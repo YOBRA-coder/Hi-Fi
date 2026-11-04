@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/db";
+import { expandBlockedDomains, tlsHostPatterns } from "@/lib/student-block";
 import { nid } from "@/lib/utils";
 import type { RouterProbe } from "@/lib/types";
 import { getSettingsSecret } from "./settings.server";
@@ -380,74 +381,136 @@ async function ensureSpeedProfile(
 /** Profiles this process has already created/updated on a router (cleared if the router says one is missing). */
 const profileCache = new Set<string>();
 
-function escapeRegExp(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Every firewall rule we create for student blocking carries this comment prefix. */
+const STUDENT_PREFIX = "telnet-student:";
+const STUDENT_CHAIN = "telnet-student-block";
+
+/** router host -> signature of the domain list already applied (skips ~100 REST calls per activation). */
+const studentBlockCache = new Map<string, string>();
+
+type FilterRow = { ".id"?: string; chain?: string; comment?: string; dynamic?: string };
+
+async function inBatches<T>(items: T[], size: number, fn: (item: T) => Promise<unknown>) {
+  for (let i = 0; i < items.length; i += size) {
+    await Promise.all(items.slice(i, i + size).map(fn));
+  }
 }
 
 /**
- * Best-effort: drops traffic to a configurable set of "non-study" domains
- * for anyone on the telnet-student address-list, via a layer7-protocol
- * regex match + a forward-chain firewall filter. This is a well-known
- * RouterOS pattern, but layer7 matching is CPU-heavier than simple
- * address-list drops, doesn't see traffic hidden behind DNS-over-HTTPS or a
- * VPN, and its exact behaviour differs across RouterOS versions — operators
- * should verify this actually blocks the intended domains on their own
- * router before depending on it.
+ * Blocks "non-study" sites for anyone on the telnet-student address-list.
+ *
+ * The first version used a layer7 regex placed at the END of the forward chain.
+ * That blocked browsers but not apps, for four reasons:
+ *  1. Apps use other hostnames (tiktokv.com, twimg.com, fbcdn.net ...) than the
+ *     one the operator typed -> expandBlockedDomains() adds them.
+ *  2. Apps use QUIC (UDP 443), which layer7 / SNI matching can't read; dropping
+ *     it makes apps fall back to normal TLS over TCP, where the SNI is visible.
+ *  3. The drop rule sat after the router's "accept established" rule, so the
+ *     TLS hello (sent on an already-established connection) never reached it
+ *     -> our rules are now moved above every other static forward rule.
+ *  4. Errors were swallowed silently -> they are logged now.
+ * Matching uses `tls-host` (the SNI in the TLS ClientHello), which is cheap and
+ * reliable for HTTPS; a jump rule limited to the first bytes of each connection
+ * keeps CPU use low. It cannot see inside a VPN or Encrypted Client Hello.
  */
 async function ensureStudentDomainBlock(creds: RouterCreds, domains: string[]) {
-  const clean = domains.map((d) => d.trim()).filter(Boolean);
-  if (clean.length === 0) return;
+  const expanded = expandBlockedDomains(domains);
+  if (expanded.length === 0) return;
+  const signature = expanded.join(",");
+  if (studentBlockCache.get(creds.host) === signature) return;
+
   try {
-    const regexp = `^.*(${clean.map(escapeRegExp).join("|")}).*$`;
-    const l7 = (await routeros(
-      "/rest/ip/firewall/layer7-protocol",
-      {},
-      creds,
-    )) as Array<{ ".id"?: string; name?: string }> | null;
-    const l7Hit = (l7 ?? []).find((p) => p.name === "telnet-student-block");
-    if (l7Hit?.[".id"]) {
-      await routeros(
-        `/rest/ip/firewall/layer7-protocol/${encodeURIComponent(l7Hit[".id"])}`,
-        { method: "PATCH", body: JSON.stringify({ regexp }) },
-        creds,
-      );
-    } else {
-      await routeros(
-        "/rest/ip/firewall/layer7-protocol",
-        {
-          method: "PUT",
-          body: JSON.stringify({ name: "telnet-student-block", regexp }),
-        },
-        creds,
-      );
+    const topRules = [
+      {
+        chain: "forward",
+        "src-address-list": "telnet-student",
+        protocol: "udp",
+        "dst-port": "443",
+        action: "drop",
+        comment: `${STUDENT_PREFIX}quic`,
+      },
+      {
+        chain: "forward",
+        "src-address-list": "telnet-student",
+        protocol: "tcp",
+        "dst-port": "443",
+        "connection-bytes": "0-8000",
+        action: "jump",
+        "jump-target": STUDENT_CHAIN,
+        comment: `${STUDENT_PREFIX}jump`,
+      },
+    ];
+    const chainRules = expanded.flatMap((d) =>
+      tlsHostPatterns(d).map((pattern) => ({
+        chain: STUDENT_CHAIN,
+        protocol: "tcp",
+        "tls-host": pattern,
+        action: "reject",
+        "reject-with": "tcp-reset",
+        comment: `${STUDENT_PREFIX}${pattern}`,
+      })),
+    );
+    const desired = [...topRules, ...chainRules];
+    const wanted = new Set(desired.map((r) => r.comment));
+
+    const list = async () =>
+      ((await routeros("/rest/ip/firewall/filter", {}, creds)) as FilterRow[] | null) ?? [];
+    const existing = await list();
+
+    // Remove stale rules: domains no longer in the list, and the old layer7 rule.
+    const stale = existing.filter(
+      (f) =>
+        f[".id"] &&
+        ((f.comment?.startsWith(STUDENT_PREFIX) && !wanted.has(f.comment)) ||
+          f.comment === "telnet-student-block"),
+    );
+    await inBatches(stale, 6, (f) =>
+      routeros(`/rest/ip/firewall/filter/${encodeURIComponent(f[".id"]!)}`, { method: "DELETE" }, creds),
+    );
+    try {
+      const l7 = (await routeros("/rest/ip/firewall/layer7-protocol", {}, creds)) as
+        | Array<{ ".id"?: string; name?: string }>
+        | null;
+      const old = (l7 ?? []).find((p) => p.name === "telnet-student-block");
+      if (old?.[".id"]) {
+        await routeros(`/rest/ip/firewall/layer7-protocol/${encodeURIComponent(old[".id"])}`, { method: "DELETE" }, creds);
+      }
+    } catch {
+      /* the old layer7 entry is harmless once its filter rule is gone */
     }
 
-    const filters = (await routeros(
-      "/rest/ip/firewall/filter",
-      {},
-      creds,
-    )) as Array<{ ".id"?: string; comment?: string }> | null;
-    const filterHit = (filters ?? []).find(
-      (f) => f.comment === "telnet-student-block",
+    const have = new Set(existing.map((f) => f.comment));
+    const missing = desired.filter((r) => !have.has(r.comment));
+    // The chain rules must exist before the jump that points at them.
+    await inBatches(
+      missing.filter((r) => r.chain === STUDENT_CHAIN),
+      6,
+      (r) => routeros("/rest/ip/firewall/filter", { method: "PUT", body: JSON.stringify(r) }, creds),
     );
-    if (!filterHit) {
-      await routeros(
-        "/rest/ip/firewall/filter",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            chain: "forward",
-            "src-address-list": "telnet-student",
-            "layer7-protocol": "telnet-student-block",
-            action: "drop",
-            comment: "telnet-student-block",
-          }),
-        },
-        creds,
-      );
+    for (const r of missing.filter((r) => r.chain !== STUDENT_CHAIN)) {
+      await routeros("/rest/ip/firewall/filter", { method: "PUT", body: JSON.stringify(r) }, creds);
     }
-  } catch {
-    /* domain block is best-effort — see function comment */
+
+    // Put quic + jump above every other static forward rule (accept-established, fasttrack, ...).
+    const now = (await list()).filter((f) => f.dynamic !== "true");
+    const foreign = now.find((f) => f.chain === "forward" && !f.comment?.startsWith(STUDENT_PREFIX));
+    if (foreign?.[".id"]) {
+      const foreignIdx = now.indexOf(foreign);
+      for (const comment of topRules.map((r) => r.comment)) {
+        const mine = now.find((f) => f.comment === comment);
+        if (mine?.[".id"] && now.indexOf(mine) > foreignIdx) {
+          await routeros(
+            "/rest/ip/firewall/filter/move",
+            { method: "POST", body: JSON.stringify({ numbers: mine[".id"], destination: foreign[".id"] }) },
+            creds,
+          );
+        }
+      }
+    }
+    studentBlockCache.set(creds.host, signature);
+  } catch (err) {
+    // Still best-effort (activation must not fail over it), but never silent.
+    console.error("[student-block] could not apply domain block on", creds.host, err);
   }
 }
 

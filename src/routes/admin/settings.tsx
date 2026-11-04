@@ -525,9 +525,9 @@ function SettingsPage() {
           />
         </Field>
         <p className="text-xs text-subtle">
-          Enforced via a router-side domain filter (layer7 + firewall rule).
-          This is best-effort — it won't catch traffic behind a VPN or
-          DNS-over-HTTPS, and support varies by RouterOS version, so verify
+          Enforced on the router by matching the site name in HTTPS traffic (TLS SNI), and QUIC/HTTP3 is blocked for student logins so apps fall back to it. Each site also blocks its app/CDN domains automatically (e.g. tiktok.com also covers tiktokv.com, tiktokcdn.com).
+          Still best-effort — it won't catch traffic behind a VPN or
+          Encrypted Client Hello, and it needs RouterOS 7, so verify
           it actually blocks these domains on your own router.
         </p>
       </Card>
