@@ -1,5 +1,6 @@
 import { getSql } from "@/lib/db";
 import { getHwRouter, saveClientContext, siteSlugForRouter } from "./index";
+import { onlinePage, safeContinueUrl, tryAutoReconnect } from "./auto-reconnect.server";
 
 /** Omada external-portal landing: remember who the client is, then show the normal portal. */
 export async function handleOmadaEntry(request: Request, routerId: string): Promise<Response> {
@@ -23,6 +24,12 @@ export async function handleOmadaEntry(request: Request, routerId: string): Prom
       redirectUrl: q.get("redirectUrl") ?? "",
     },
   });
+  // Package still running on this phone: switch it back on and skip the portal entirely.
+  const auto = await tryAutoReconnect({ routerId, clientMac: q.get("clientMac") ?? "", ctxId });
+  if (auto.ok) {
+    const back = safeContinueUrl(q.get("redirectUrl"));
+    return back ? Response.redirect(back, 302) : onlinePage(null);
+  }
   const slug = await siteSlugForRouter(routerId);
   const u = new URL("/portal", request.url);
   if (slug) u.searchParams.set("site", slug);
@@ -68,6 +75,10 @@ export async function handleMikrotikEntry(request: Request, key: string): Promis
     clientMac: q.get("mac") ?? "",
     clientIp: q.get("ip"),
   });
+  // Package still running on this phone: log it back in on the router and skip the portal.
+  // The router's login page may pass the original URL as ?dst= ( $(link-orig) ) to continue to.
+  const auto = await tryAutoReconnect({ routerId: r.id, clientMac: q.get("mac") ?? "", ctxId });
+  if (auto.ok) return onlinePage(safeContinueUrl(q.get("dst")));
   const target = new URLSearchParams();
   if (r.slug) target.set("site", r.slug);
   if (ctxId) target.set("hwc", ctxId);

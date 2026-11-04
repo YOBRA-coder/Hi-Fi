@@ -10,6 +10,7 @@
  */
 import { getSql } from "@/lib/db";
 import { getHwRouter, saveClientContext, siteSlugForRouter } from "./index";
+import { onlinePage, tryAutoReconnect } from "./auto-reconnect.server";
 
 const text = (body: string, status = 200) =>
   new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
@@ -60,6 +61,11 @@ export async function handleWifidog(request: Request, routerId: string, sub: str
         url: q("url"),
       },
     });
+    // Package still running on this phone: finish the gateway login now (no portal page).
+    const auto = await tryAutoReconnect({ routerId, clientMac: q("mac"), ctxId });
+    if (auto.ok) {
+      return auto.handoffUrl ? Response.redirect(auto.handoffUrl, 302) : onlinePage(null);
+    }
     return portalRedirect(request, routerId, ctxId);
   }
 

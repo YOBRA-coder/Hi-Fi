@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, getRouteApi } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { PackageBrowser } from "@/components/portal/package-browser";
 import { ShopBanner, ShopLink, ShopPromo } from "@/components/portal/shop-link";
 import { PurchaseConsent } from "@/components/portal/legal-footer";
@@ -10,7 +10,9 @@ import { useDevice } from "@/hooks/use-device";
 import { readSite } from "@/lib/device";
 import { HOTSPOT_FALLBACK } from "@/lib/brand-copy";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
-import { getPortalBootstrap, signOut } from "@/lib/fn/portal";
+import { useHardwareHandoff } from "@/hooks/use-hardware-handoff";
+import { deviceInfo } from "@/lib/device";
+import { connectActive, getPortalBootstrap, signOut } from "@/lib/fn/portal";
 
 
 
@@ -53,6 +55,34 @@ function PortalHome() {
     }
   }, [q.data, update]);
 
+  // Package still running on this phone: reconnect by itself instead of asking for a tap on "Connect".
+  // Tried once per page load; if it fails the normal "Connect" screen below shows the reason.
+  const autoTried = useRef(false);
+  const auto = useMutation({
+    mutationFn: () =>
+      connectActive({
+        data: {
+          token: device!.token,
+          phone: device?.phone ?? undefined,
+          customerId: device?.customerId ?? undefined,
+          deviceInfo: deviceInfo(),
+          site: readSite(),
+        },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["portal"] }),
+  });
+  const pre = q.data?.access;
+  const needsAutoConnect = Boolean(
+    pre && pre.pack.status === "ACTIVE" && !pre.otherDevice && !pre.connected,
+  );
+  useEffect(() => {
+    if (!needsAutoConnect || autoTried.current || !device) return;
+    autoTried.current = true;
+    auto.mutate();
+  }, [needsAutoConnect, device, auto]);
+  // Ruijie: finish the gateway login once connected.
+  useHardwareHandoff(Boolean(pre?.connected), device?.token);
+
   const settings = q.data?.settings ?? catalog.settings;
   const packages = q.data?.packages ?? catalog.packages;
   const internetUp = q.data?.internetUp ?? catalog.internetUp;
@@ -61,6 +91,17 @@ function PortalHome() {
   const member = q.data?.member;
 
   if (access && access.pack.status === "ACTIVE") {
+    if (needsAutoConnect && (auto.isPending || !autoTried.current || (auto.data?.ok && q.isFetching))) {
+      return (
+        <PortalShell hotspotName={hotspot}>
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-accent">Welcome back</p>
+          <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight">Reconnecting you…</h1>
+          <p className="mt-4 text-sm text-muted">
+            Your {access.pack.packageName} package is still active. You will be online in a moment.
+          </p>
+        </PortalShell>
+      );
+    }
     if (access.otherDevice) {
       return (
         <PortalShell hotspotName={hotspot}>
@@ -113,9 +154,15 @@ function PortalHome() {
             {new Date(access.pack.expiryTime).toLocaleString()}
           </p>
         </div>
-        <Button asChild size="xl" className="mt-6 w-full">
-          <Link to="/portal/connect">Connect</Link>
-        </Button>
+        {access.connected ? (
+          <p className="mt-6 rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-center text-sm text-ok">
+            You are online.
+          </p>
+        ) : (
+          <Button asChild size="xl" className="mt-6 w-full">
+            <Link to="/portal/connect">Connect</Link>
+          </Button>
+        )}
         <Link
           to="/portal/account"
           className="mt-4 text-center text-sm text-muted hover:text-fg"

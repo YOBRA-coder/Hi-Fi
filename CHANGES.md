@@ -325,3 +325,12 @@ Portal home now shows a prominent "Buy now" banner above the packages and a one-
 
 ## VPS hosting
 `NITRO_PRESET=node-server` now builds a normal Node server (default stays Vercel). `deploy/` has Docker + Postgres + Caddy (HTTPS), a WireGuard tunnel to the router, an hEX script and DEPLOY_VPS.md.
+
+## Auto-reconnect when a package is still active
+- A phone that comes back (or re-joins the Wi-Fi) while its package is still running is switched back on at the router entry
+  (`/api/hw/entry/...` for MikroTik and Omada, WiFiDog `login/` for Ruijie) before any portal page is shown: no portal, no "Connect" tap.
+  Code: `src/lib/services/hardware/auto-reconnect.server.ts`.
+- Only a device already bound to the package is reconnected; blocked, closed-hours, capacity, in-use or router errors fall through to the portal.
+- 20 s per-MAC cooldown prevents a redirect loop if a router login silently fails.
+- MikroTik: optional `?dst=$(link-orig)` on the hotspot login redirect sends the phone on to the page it asked for. Omada uses its own `redirectUrl`.
+- Portal home also auto-connects once if it is opened with an active package ("Reconnecting you…") instead of waiting for a tap.
