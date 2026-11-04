@@ -26,6 +26,7 @@ const ATTR = {
 
 const MIKROTIK_VENDOR = 14988;
 const MIKROTIK_RATE_LIMIT = 8;
+const MIKROTIK_ADDRESS_LIST = 19;
 
 type Attr = { type: number; value: Buffer };
 
@@ -60,13 +61,18 @@ function encodeAttr(type: number, value: Buffer | string | number): Buffer {
   return Buffer.concat([Buffer.from([type, v.length + 2]), v]);
 }
 
-function encodeMikrotikRateLimit(value: string): Buffer {
+/** Vendor-specific attribute (type 26) carrying one MikroTik string attribute. */
+function encodeMikrotikString(vendorType: number, value: string): Buffer {
   const v = Buffer.from(value, "utf8");
   const vendor = Buffer.alloc(6);
   vendor.writeUInt32BE(MIKROTIK_VENDOR, 0);
-  vendor[4] = MIKROTIK_RATE_LIMIT;
+  vendor[4] = vendorType;
   vendor[5] = v.length + 2;
   return encodeAttr(26, Buffer.concat([vendor, v]));
+}
+
+function encodeMikrotikRateLimit(value: string): Buffer {
+  return encodeMikrotikString(MIKROTIK_RATE_LIMIT, value);
 }
 
 function decryptPap(encrypted: Buffer, secret: string, requestAuth: Buffer): string | null {
@@ -130,13 +136,19 @@ export async function handleAccessRequest(msg: Buffer, secret: string): Promise<
   }
   if (!ok) return reject("Invalid credentials");
 
-  return build(CODE.ACCESS_ACCEPT, id, requestAuth, secret, [
+  const accept = [
     encodeAttr(ATTR.SessionTimeout, user.sessionTimeout),
     encodeAttr(ATTR.PortLimit, user.portLimit),
     encodeMikrotikRateLimit(rateLimit(user.uploadKbps, user.downloadKbps)),
     encodeAttr(ATTR.ReplyMessage, `TelNet OK ${user.packageName} ${user.sessionTimeout}s left`),
     encodeAttr(ATTR.Class, user.classId),
-  ]);
+  ];
+  // A session the router authenticates through RADIUS does NOT inherit the local hotspot
+  // profile's address-list. Without this attribute a student phone that re-authenticates over
+  // RADIUS (another AP, a dropped-and-returned session) lands outside "telnet-student", and the
+  // firewall block never sees it: every restricted app suddenly works.
+  if (user.isStudent) accept.push(encodeMikrotikString(MIKROTIK_ADDRESS_LIST, "telnet-student"));
+  return build(CODE.ACCESS_ACCEPT, id, requestAuth, secret, accept);
 }
 
 export function handleAccounting(msg: Buffer, secret: string): Buffer {

@@ -23,6 +23,7 @@ import {
   getRouterCredentialsById,
   probeRouter,
   syncStudentBlock,
+  syncStudentMembers,
   type RouterCreds,
 } from "@/lib/services/mikrotik.server";
 import { resumeEligiblePackages } from "@/lib/services/resume.server";
@@ -245,9 +246,19 @@ async function healStudentBlocks(): Promise<void> {
     .filter(Boolean);
   if (domains.length === 0) return;
   const sql = await getSql();
+  const students = await sql<{ mikrotik_username: string }>`
+    select distinct cp.mikrotik_username
+    from customer_packages cp
+    join packages pkg on pkg.id = cp.package_id
+    where cp.status = 'ACTIVE' and cp.expiry_time > now()
+      and pkg.category = 'STUDENT' and cp.mikrotik_username is not null
+  `;
+  const studentUsernames = students.map((r) => String(r.mikrotik_username));
   const routers = await sql<{ id: string }>`select id from mikrotiks where hardware_type = 'mikrotik'`;
   for (const r of routers) {
     const creds = await getRouterCredentialsById(String(r.id));
-    if (creds) await syncStudentBlock(creds, domains);
+    if (!creds) continue;
+    await syncStudentBlock(creds, domains);
+    await syncStudentMembers(creds, studentUsernames);
   }
 }

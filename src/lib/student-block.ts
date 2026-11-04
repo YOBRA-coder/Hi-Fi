@@ -14,15 +14,17 @@ const COMPANIONS: Record<string, string[]> = {
   "tiktok.com": [
     "tiktokv.com", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokw.us", "ttwstatic.com",
     "byteoversea.com", "ibytedtos.com", "ibyteimg.com", "muscdn.com", "musical.ly",
-    "tiktokd.net", "tik-tokapi.com",
+    "tiktokd.net", "tik-tokapi.com", "tiktokcdn-eu.com", "tiktokv.us", "tiktokv.eu",
+    "tiktokcdn-in.com", "tiktok.org", "byteoversea.net", "bytedance.com", "bytedance.net",
+    "ipstatp.com", "isnssdk.com", "ibytedtos.net", "byteimg.com", "bdurl.net",
   ],
   "x.com": ["twitter.com", "twimg.com", "t.co", "twitter.map.fastly.net", "ads-twitter.com"],
   "twitter.com": ["x.com", "twimg.com", "t.co", "ads-twitter.com"],
-  "facebook.com": ["fb.com", "fbcdn.net", "facebook.net", "fbsbx.com", "fb.me", "messenger.com", "fbpigeon.com"],
-  "instagram.com": ["cdninstagram.com", "instagr.am", "fbcdn.net", "ig.me"],
-  "youtube.com": ["youtu.be", "googlevideo.com", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com", "youtube.googleapis.com", "ggpht.com"],
-  "netflix.com": ["nflxvideo.net", "nflximg.net", "nflxext.com", "nflxso.net", "netflix.net"],
-  "snapchat.com": ["sc-cdn.net", "snap-dev.net", "snapkit.com", "feelinsonice.com", "snapads.com"],
+  "facebook.com": ["fb.com", "fbcdn.net", "facebook.net", "fbsbx.com", "fb.me", "messenger.com", "fbpigeon.com", "tfbnw.net", "fburl.com", "fb.watch"],
+  "instagram.com": ["cdninstagram.com", "instagr.am", "fbcdn.net", "ig.me", "instagram.net", "fbsbx.com", "facebook.net"],
+  "youtube.com": ["youtu.be", "googlevideo.com", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com", "youtube.googleapis.com", "ggpht.com", "yt3.ggpht.com", "youtubekids.com", "youtube-ui.l.google.com", "yt.be", "withyoutube.com"],
+  "netflix.com": ["nflxvideo.net", "nflximg.net", "nflxext.com", "nflxso.net", "netflix.net", "nflxext.com", "fast.com"],
+  "snapchat.com": ["sc-cdn.net", "snap-dev.net", "snapkit.com", "feelinsonice.com", "snapads.com", "snap.com", "snapchat.map.fastly.net", "sc-gw.com", "sc-jpl.com", "snap-storage-cdn.l.google.com"],
 };
 
 /** Strip scheme, path, port, "www." and wildcards; lower-case; null if it isn't a hostname. */

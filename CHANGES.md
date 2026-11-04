@@ -1,4 +1,9 @@
 # Changes — customer accounts, sites, rewards page, RADIUS, network map, per-ISP capacity, vouchers & portal polish, outage credit, opening hours, AP revenue
+- **Student block kept on after a while (fix)**: (1) RADIUS Access-Accept now sends `Mikrotik-Address-List = telnet-student` for student
+  packages. A session the router authenticates over RADIUS does not inherit the local hotspot profile's address-list, so those phones
+  were outside the block and every restricted app worked again. (2) New background reconcile (`syncStudentMembers`, every ~45 s from the
+  minute tick) puts every active student hotspot session's IP on `telnet-student` if missing and removes our entries for phones that
+  are no longer student sessions (entries carry a 15 min timeout, comment `telnet-student:auto`). (3) More app/CDN hostnames per service.
 - **SMS code at customer sign-up** (optional, operator switch in Settings -> SMS & reset; migration `0036_signup_otp.sql`).
 - **Operator accounts** (phone + password, owners/operators, SMS-code password reset; migration `0035_operators.sql`) and an **installable-app (PWA) fix**: working manifest, 192/512 icons, service worker, install button. See MULTI_HARDWARE.md.
 - **Opening hours for Omada/Ruijie** (TelNet-enforced closing, vendor Wi-Fi schedule recommended for hiding the name) and **TextBee SMS code for PIN reset** with an operator-chosen method

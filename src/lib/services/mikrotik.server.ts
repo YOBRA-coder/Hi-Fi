@@ -542,6 +542,79 @@ export async function syncStudentBlock(creds: RouterCreds, domains: string[]): P
   }
 }
 
+/** router host -> last time student phones were reconciled onto the address-list (throttle). */
+const studentMembersChecked = new Map<string, number>();
+const STUDENT_MEMBERS_RECHECK_MS = 45_000;
+const STUDENT_AUTO_COMMENT = `${STUDENT_PREFIX}auto`;
+
+/**
+ * Keeps the "telnet-student" address-list true to who is really a student right now.
+ *
+ * The firewall block only affects phones whose IP is on that list, and the list is normally filled
+ * by the hotspot PROFILE at login. That is fragile: a session authenticated through RADIUS, a login
+ * made before the profile was patched, or a session that kept running while its user was moved to
+ * another profile never gets the entry, so every restricted app works again "after a while".
+ * Here the app (which knows who bought a student package) is the source of truth:
+ *  - every active hotspot session of a student username is added to the list when missing;
+ *  - entries we added for phones that are no longer a student session are removed.
+ * Entries carry a short timeout, so a phone that vanishes drops off by itself.
+ */
+export async function syncStudentMembers(creds: RouterCreds, studentUsernames: string[]): Promise<void> {
+  if (creds.apiMode === "api6") return;
+  const last = studentMembersChecked.get(creds.host) ?? 0;
+  if (Date.now() - last < STUDENT_MEMBERS_RECHECK_MS) return;
+  studentMembersChecked.set(creds.host, Date.now());
+  try {
+    const students = new Set(studentUsernames);
+    const [active, listed] = await Promise.all([
+      routeros("/rest/ip/hotspot/active", {}, creds) as Promise<Array<{ user?: string; address?: string }> | null>,
+      routeros("/rest/ip/firewall/address-list?list=telnet-student", {}, creds) as Promise<
+        Array<{ ".id"?: string; address?: string; comment?: string; dynamic?: string }> | null
+      >,
+    ]);
+    const wantIps = new Set(
+      (active ?? [])
+        .filter((a) => a.user && students.has(String(a.user)) && a.address)
+        .map((a) => String(a.address)),
+    );
+    const haveIps = new Set((listed ?? []).map((e) => String(e.address ?? "")));
+
+    for (const ip of wantIps) {
+      if (haveIps.has(ip)) continue;
+      await routeros(
+        "/rest/ip/firewall/address-list",
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            list: "telnet-student",
+            address: ip,
+            timeout: "15m",
+            comment: STUDENT_AUTO_COMMENT,
+          }),
+        },
+        creds,
+      );
+    }
+    // Refresh our own entries that are still wanted (so they never time out under a live session)
+    // and drop ours that no longer belong to a student session.
+    for (const e of listed ?? []) {
+      if (e.comment !== STUDENT_AUTO_COMMENT || !e[".id"]) continue;
+      const ip = String(e.address ?? "");
+      if (!wantIps.has(ip)) {
+        await routeros(`/rest/ip/firewall/address-list/${encodeURIComponent(e[".id"])}`, { method: "DELETE" }, creds);
+      } else {
+        await routeros(
+          `/rest/ip/firewall/address-list/${encodeURIComponent(e[".id"])}`,
+          { method: "PATCH", body: JSON.stringify({ timeout: "15m" }) },
+          creds,
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[student-block] member sync failed on", creds.host, err);
+  }
+}
+
 async function kickExtraActiveSessions(username: string, creds: RouterCreds) {
   try {
     const active = (await routeros(
