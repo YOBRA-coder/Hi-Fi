@@ -782,41 +782,45 @@ export async function hotspotLoginDevice(input: {
   // The router's own host table is the truth about where THIS phone is right now. The IP saved
   // when the phone opened the login page can be stale (DHCP renewed, phone reconnected), and a
   // login on a stale address succeeds on the router but the phone never gets internet.
-  try {
-    const hosts = (await routeros(
-      `/rest/ip/hotspot/host?mac-address=${encodeURIComponent(mac)}`,
-      {},
-      creds,
-    )) as Array<{ address?: string; "to-address"?: string }> | null;
+  // The host table and the by-MAC session list do not depend on each other: ask both at once.
+  const [hostsRes, byMacRes] = await Promise.allSettled([
+    routeros(`/rest/ip/hotspot/host?mac-address=${encodeURIComponent(mac)}`, {}, creds),
+    routeros(`/rest/ip/hotspot/active?mac-address=${encodeURIComponent(mac)}`, {}, creds),
+  ]);
+  if (hostsRes.status === "fulfilled") {
+    const hosts = hostsRes.value as Array<{ address?: string }> | null;
     const live = (hosts ?? []).map((h) => String(h.address ?? "")).filter(Boolean);
     if (live.length > 0 && !live.includes(ip)) {
       console.warn(`[mikrotik] ${mac} is at ${live[0]} on the router, not ${ip}; logging in there`);
       ip = live[0];
     }
-  } catch {
-    /* host table not readable: use the saved IP */
   }
 
   // Clear only THIS phone's own stale sessions (same MAC, or same address when it is the same MAC).
   // Never kick another phone that merely holds a similar address.
   try {
-    const [byMac, byIp] = await Promise.all([
-      routeros(`/rest/ip/hotspot/active?mac-address=${encodeURIComponent(mac)}`, {}, creds),
-      routeros(`/rest/ip/hotspot/active?address=${encodeURIComponent(ip)}`, {}, creds),
-    ]);
+    const byIp = await routeros(`/rest/ip/hotspot/active?address=${encodeURIComponent(ip)}`, {}, creds);
     const rows = [
-      ...(((byMac as Array<Record<string, unknown>> | null) ?? [])),
+      ...(byMacRes.status === "fulfilled"
+        ? ((byMacRes.value as Array<Record<string, unknown>> | null) ?? [])
+        : []),
       ...(((byIp as Array<Record<string, unknown>> | null) ?? []).filter(
         (r) => normMac(r["mac-address"]) === macKey,
       )),
     ];
     const seen = new Set<string>();
+    const ids: string[] = [];
     for (const row of rows) {
       const id = String(row[".id"] ?? "");
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      await routeros(`/rest/ip/hotspot/active/${encodeURIComponent(id)}`, { method: "DELETE" }, creds);
+      ids.push(id);
     }
+    await Promise.all(
+      ids.map((id) =>
+        routeros(`/rest/ip/hotspot/active/${encodeURIComponent(id)}`, { method: "DELETE" }, creds),
+      ),
+    );
   } catch {
     /* nothing to clear */
   }

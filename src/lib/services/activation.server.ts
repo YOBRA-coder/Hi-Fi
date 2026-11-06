@@ -125,22 +125,18 @@ async function activateFromPaymentUnlocked(
   // the customer still paid). awardLoyaltyForPayment() is idempotent per
   // payment id, so this is safe however many times activation is retried
   // or a package is later auto-resumed.
-  try {
-    await awardLoyaltyForPayment(paymentId);
-  } catch (err) {
-    console.error("[loyalty] award failed for payment", paymentId, err);
-  }
-
-  // Referral/welcome minutes (idempotent per payment — see
-  // applyReferralMinutesForPayment). Only ever non-zero the first time
-  // this payment is activated, so it's safe to fold into a fresh
-  // customer_packages row below without double-counting on reconnects.
+  // Loyalty and referral are independent DB jobs: run them together, not one after the other.
   let referralExtraMinutes = 0;
-  try {
-    referralExtraMinutes = await applyReferralMinutesForPayment(paymentId);
-  } catch (err) {
-    console.error("[referral] minutes award failed for payment", paymentId, err);
-  }
+  const [, referral] = await Promise.all([
+    awardLoyaltyForPayment(paymentId).catch((err) => {
+      console.error("[loyalty] award failed for payment", paymentId, err);
+    }),
+    applyReferralMinutesForPayment(paymentId).catch((err) => {
+      console.error("[referral] minutes award failed for payment", paymentId, err);
+      return 0;
+    }),
+  ]);
+  referralExtraMinutes = Number(referral ?? 0) || 0;
 
   const existing = await sql<SqlRow>`
     select cp.*, pkg.name as package_name

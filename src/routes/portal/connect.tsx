@@ -22,6 +22,14 @@ function ConnectPage() {
   const account = useQuery({
     queryKey: ["account", device?.token, device?.customerId],
     enabled: ready && Boolean(device),
+    // Never trust a cached copy here: it may predate the payment, which showed a stale
+    // "Connect" screen until the page was refreshed.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchInterval: (query) => {
+      const a = query.state.data?.access;
+      return a && !a.connected && !a.otherDevice ? 2000 : false;
+    },
     queryFn: () =>
       getAccount({
         data: {
