@@ -252,7 +252,7 @@ function DashboardPage() {
                       a.tone === "danger" ? "bg-danger" : a.tone === "warn" ? "bg-warn" : "bg-accent",
                     )}
                   />
-                  <span className="min-w-0 flex-1">{a.text}</span>
+                  <span className="min-w-0 flex-1 break-words">{a.text}</span>
                   <span className="shrink-0 text-accent">Open →</span>
                 </Link>
               </li>
@@ -309,7 +309,7 @@ function DashboardPage() {
       </div>
 
       {/* 4. One tap to the pages used most */}
-      <nav aria-label="Quick links" className="flex gap-2 overflow-x-auto pb-1">
+      <nav aria-label="Quick links" className="flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {quick.map((l) => (
           <Link
             key={l.to}

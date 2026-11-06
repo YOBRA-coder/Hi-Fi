@@ -51,7 +51,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
 
   return (
-    <div className="flex min-h-dvh bg-bg">
+    <div className="flex min-h-dvh w-full max-w-full overflow-x-clip bg-bg">
       <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-border bg-surface/60 px-3 py-5 lg:flex">
         <Link to="/admin/dashboard" className="mb-6 flex items-center gap-2 px-2">
           <TelNetMark className="size-6" />
@@ -83,7 +83,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 max-w-full flex-1 flex-col">
 <header className="sticky top-0 z-50 bg-black flex items-center justify-between border-b border-border px-4 py-3 lg:hidden"> 
   <Link to="/admin/dashboard" className="flex items-center gap-2"> 
     <TelNetMark className="size-6" /> 
@@ -93,7 +93,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     <OperatorUserButton /> 
   </div> 
 </header>
-        <div className="flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</div>
+        <div className="min-w-0 max-w-full flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</div>
         <nav className="sticky bottom-0 grid grid-cols-4 border-t border-border bg-surface/95 px-1 py-1 lg:hidden">
           {nav.slice(0, 3).map((item) => {
             const active = pathname === item.to;

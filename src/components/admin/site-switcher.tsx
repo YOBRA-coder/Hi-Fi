@@ -17,13 +17,13 @@ export function SiteSwitcher({ className }: { className?: string }) {
 
   if (sites.length <= 1) return null;
   return (
-    <label className={"flex items-center gap-1.5 " + (className ?? "")}>
-      <MapPin className="size-4 text-accent" />
+    <label className={"flex min-w-0 max-w-full items-center gap-1.5 " + (className ?? "")}>
+      <MapPin className="size-4 shrink-0 text-accent" />
       <select
         aria-label="Site / town"
         value={site}
         onChange={(e) => setSite(e.target.value)}
-        className="h-9 rounded-md border border-border bg-raised px-3 text-sm"
+        className="h-9 min-w-0 max-w-full flex-1 truncate rounded-md border border-border bg-raised px-3 text-sm"
       >
         <option value={ALL_SITES}>All sites</option>
         {sites.map((s) => (

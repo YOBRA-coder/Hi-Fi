@@ -34,12 +34,19 @@
 
 @layer base {
   html {
+    /* Nothing may ever make the page wider than the phone: that is what made the admin
+       screens "shake" sideways under the finger. clip (not hidden) keeps sticky bars working. */
+    overflow-x: clip;
+    max-width: 100%;
+    overscroll-behavior-x: none;
     color-scheme: dark;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   body {
+    overflow-x: clip;
+    max-width: 100%;
     background: var(--color-bg);
     color: var(--color-fg);
     font-family: var(--font-sans);
