@@ -1,14 +1,15 @@
 # Run from this folder:  docker compose up -d --build
-# app and caddy use the host network so the app can reach the router at its WireGuard address (10.88.0.2).
+# app, caddy, and db use the host network so they can seamlessly interact over localhost and reach WireGuard
 services:
   db:
     image: postgres:16
     restart: unless-stopped
+    network_mode: host
     environment:
       POSTGRES_USER: tellnet
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: tellnet
-    ports: ["127.0.0.1:5432:5432"]
+    # ports mapping is removed because network_mode: host bypasses standard port publishing
     volumes: ["pgdata:/var/lib/postgresql/data"]
 
   app:
