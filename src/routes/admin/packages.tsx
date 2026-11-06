@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import {
   deletePackage,
+  removePackage,
   listPackagesAdmin,
   listSites,
   savePackage,
@@ -184,6 +185,16 @@ function PackagesAdminPage() {
     },
   });
 
+  const remove = useMutation({
+    mutationFn: (id: string) => removePackage({ data: { id } }),
+    onSuccess: (res) => {
+      if (res.ok) toast.success("Package deleted");
+      else toast.error(res.error);
+      qc.invalidateQueries({ queryKey: ["packages"] });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not delete package"),
+  });
+
   return (
     <div className="space-y-5">
       <div className="flex items-end justify-between gap-3">
@@ -331,6 +342,22 @@ function PackagesAdminPage() {
                       Deactivate
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-danger"
+                    disabled={remove.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete "${pkg.name}" permanently? This cannot be undone. Packages that already have sales are deactivated instead.`,
+                        )
+                      )
+                        remove.mutate(pkg.id);
+                    }}
+                  >
+                    Delete
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}

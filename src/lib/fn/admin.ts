@@ -861,6 +861,37 @@ export const deletePackage = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+/**
+ * Permanently remove a package. Payments, customer packages, sessions and vouchers keep a
+ * reference to the package they were bought on, so a package with any history cannot be
+ * erased without corrupting the records: the database refuses, and we tell the operator to
+ * keep it deactivated instead (it is already hidden from customers).
+ */
+export const removePackage = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: unknown) => z.object({ id: z.string() }).parse(data))
+  .handler(async ({ data }) => {
+    await ownerOnly();
+    const sql = await getSql();
+    try {
+      const gone = await sql<{ id: string }>`delete from packages where id = ${data.id} returning id`;
+      if (!gone.length) return { ok: false as const, error: "Package not found." };
+      return { ok: true as const };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string } | null)?.code;
+      if (code === "23503" || /foreign key|violates/i.test(msg)) {
+        await sql`update packages set status = 'INACTIVE', updated_at = now() where id = ${data.id}`;
+        return {
+          ok: false as const,
+          error:
+            "This package has payments, customers or vouchers on record, so it can't be erased. It has been deactivated instead and is hidden from customers.",
+        };
+      }
+      throw err;
+    }
+  });
+
 export const listPaymentsAdmin = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((data: unknown) =>
