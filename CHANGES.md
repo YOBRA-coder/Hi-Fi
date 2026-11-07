@@ -159,6 +159,11 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Returning admins skip the loading screen
+
+- After a successful session check the browser remembers (localStorage, this browser only) that it holds an operator session and the little the shell needs (name, owner flag). On the next visit the console appears immediately and the real check runs in the background; if it fails the hint is cleared and the operator goes to the login page, and if the network is down the console stays instead of throwing them out. It is only a hint: all data and actions are still authorised by the server. The login page never trusts the hint, and Sign out clears it. This also stops owner-only menu items from popping in late.
+- The page background is dark from the very first paint (inline style and color-scheme), so there is no white or empty flash before the stylesheet loads.
+
 ## Branded loading screen
 
 - The empty pulsing box shown after an admin signs in (and while the console checks the session) is replaced by a Hi-Fi splash (logo, name, "Signing you in…" / "Opening your console…"). The login page keeps the splash up during the reload after a successful sign-in instead of flashing the form again, and any other slow page change now shows the same splash instead of a blank page.

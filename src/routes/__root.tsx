@@ -26,7 +26,10 @@ export const Route = createRootRoute({
           APP_NAME + " Wi-Fi — pay with M-Pesa, connect, stay online. ISP-agnostic hotspot billing.",
       },
       { name: "theme-color", content: "#09090b" },
+      { name: "color-scheme", content: "dark" },
     ],
+    // Dark from the very first paint (before the stylesheet arrives) so there is never a white or empty flash.
+    styles: [{ children: "html,body{background:#09090b;color:#f4f4f5}" }],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "stylesheet", href: appCss },

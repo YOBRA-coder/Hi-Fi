@@ -39,7 +39,8 @@ function Login() {
   const { redirect } = Route.useSearch();
   const dest =
     redirect && redirect.startsWith("/admin") ? redirect : "/admin/dashboard";
-  const { isOperator, isPending } = useOperatorSession();
+  // The login page never trusts the remembered-session hint: it must know for sure before redirecting.
+  const { isOperator, isPending } = useOperatorSession({ trustHint: false });
   const info = useQuery({ queryKey: ["operator-login-info"], queryFn: () => getOperatorLoginInfoFn() });
   const { canInstall, install } = useInstallPrompt();
   const [mode, setMode] = useState<"signin" | "reset">("signin");

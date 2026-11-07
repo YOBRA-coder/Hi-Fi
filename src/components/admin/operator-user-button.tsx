@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { logoutOperator } from "@/lib/fn/public";
+import { clearOperatorHint } from "@/lib/operator";
 
 export function OperatorUserButton() {
   const navigate = useNavigate();
@@ -18,6 +19,7 @@ export function OperatorUserButton() {
         throw new Error("Sign-out failed");
       }
 
+      clearOperatorHint();
       await navigate({
         to: "/",
         replace: true,
