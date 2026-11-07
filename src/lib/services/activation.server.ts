@@ -14,6 +14,7 @@ import {
   authorizeOnHardware,
   disableUser,
   disconnectUser,
+  hasFreshContext,
   linkAuthorization,
   loginMikrotikClient,
   resolveHardwareTarget,
@@ -91,7 +92,7 @@ async function activateFromPaymentUnlocked(
    */
   opts?: { promote?: boolean },
 ): Promise<
-  | { ok: true; pack: CustomerPackage; queued?: boolean }
+  | { ok: true; pack: CustomerPackage; queued?: boolean; awaiting?: boolean; routerLoginFailed?: boolean }
   | { ok: false; reason: string }
 > {
   const startedAt = Date.now();
@@ -147,10 +148,34 @@ async function activateFromPaymentUnlocked(
   `;
 
   let packRow = existing[0];
+  // The bonus is claimed once, on the first call. If that call ended before the package row
+  // existed (router down, capacity), the retry creates the package here: use what was stored.
+  if (!packRow && referralExtraMinutes === 0) {
+    referralExtraMinutes = Number(pay.referral_minutes_applied ?? 0) || 0;
+  }
   const settings = await getSettings();
   const isQueuedRow = Boolean(packRow && String(packRow.status) === "QUEUED");
-  if (packRow && isQueuedRow && !opts?.promote) {
-    return { ok: true, pack: mapCustomerPackage(packRow), queued: true };
+
+  // Paid from the link while the phone was away from the router ("queue" mode): the package
+  // waits, with its clock stopped, until this payment is presented from a phone that has
+  // just reached the router (portal visit, auto-reconnect or "Already paid?").
+  const awayPay = settings.payAwayMode === "queue" && Boolean(pay.away);
+  const awaitingRow = Boolean(packRow && String(packRow.activation_status) === "AWAITING_DEVICE");
+  let presentHere = true;
+  if (awayPay && (awaitingRow || !packRow || opts?.promote)) {
+    presentHere = await hasFreshContext(device?.token);
+  }
+  const promoting = Boolean(opts?.promote) || (awaitingRow && presentHere);
+  if (packRow && isQueuedRow && !promoting) {
+    return { ok: true, pack: mapCustomerPackage(packRow), queued: true, awaiting: awaitingRow };
+  }
+  if (packRow && isQueuedRow && awayPay && !presentHere) {
+    // The queue says it is this package's turn but the phone is not here: keep waiting.
+    await sql`
+      update customer_packages set activation_status = 'AWAITING_DEVICE', updated_at = now()
+      where id = ${packRow.id}
+    `;
+    return { ok: true, pack: mapCustomerPackage(packRow), queued: true, awaiting: true };
   }
 
   // A row that already exists (resume, retry, promotion, or an operator's
@@ -266,11 +291,44 @@ async function activateFromPaymentUnlocked(
     }
   }
 
+  if (awayPay && !packRow && !presentHere) {
+    const id = nid("cp");
+    const pStart = new Date();
+    const pExpiry = new Date(pStart.getTime() + durationMin * 60_000);
+    await sql`
+      insert into customer_packages (
+        id, customer_id, package_id, payment_id, start_time, expiry_time,
+        speed_limit_kbps, data_limit_mb, status, activation_status, mikrotik_username
+      ) values (
+        ${id}, ${pay.customer_id}, ${pay.package_id}, ${paymentId},
+        ${pStart.toISOString()}, ${pExpiry.toISOString()},
+        ${pay.download_kbps}, ${pay.data_limit_mb},
+        'QUEUED', 'AWAITING_DEVICE', ${chosenUsername ?? usernameForPhone(String(pay.phone))}
+      )
+    `;
+    await sql`
+      update payments set activation_status = 'QUEUED', updated_at = now()
+      where id = ${paymentId}
+    `;
+    await logEvent(
+      "AWAY_QUEUED",
+      `${String(pay.phone)} paid for ${String(pay.package_name)} while away from the router. Clock not started: it starts when the phone reaches the router.`,
+    ).catch(() => {});
+    const parked = (
+      await sql<SqlRow>`
+        select cp.*, pkg.name as package_name
+        from customer_packages cp join packages pkg on pkg.id = cp.package_id
+        where cp.id = ${id}
+      `
+    )[0];
+    return { ok: true, pack: mapCustomerPackage(parked), queued: true, awaiting: true };
+  }
+
   // Promotion: the queued package's clock starts NOW (not at the moment it
   // was scheduled to), so any gap — router down, late job — never eats the
   // time the customer paid for.
   const start = !packRow || isQueuedRow ? new Date() : new Date(String(packRow.start_time));
-  const expiry = packRow
+  let expiry = packRow
     ? isQueuedRow
       ? new Date(
           start.getTime() +
@@ -279,6 +337,21 @@ async function activateFromPaymentUnlocked(
         )
       : new Date(String(packRow.expiry_time))
     : new Date(start.getTime() + durationMin * 60_000);
+
+  // Minutes banked for this customer while this package waited in the queue (e.g. a friend they
+  // referred bought a package) are added when it starts, not left until their next purchase.
+  if (packRow && isQueuedRow) {
+    const banked = await sql<{ bonus_minutes_balance: number }>`
+      update customers set bonus_minutes_balance = 0, updated_at = now()
+      where id = ${pay.customer_id} and bonus_minutes_balance > 0
+      returning bonus_minutes_balance
+    `;
+    const extra = Math.max(0, Math.floor(Number(banked[0]?.bonus_minutes_balance ?? 0)));
+    if (extra > 0) {
+      expiry = new Date(expiry.getTime() + extra * 60_000);
+      await logEvent("REFERRAL", `${extra} banked bonus minutes added to ${String(pay.phone)}'s queued package as it started.`).catch(() => {});
+    }
+  }
 
   if (expiry.getTime() <= Date.now()) {
     if (packRow) {
@@ -524,6 +597,22 @@ async function activateFromPaymentUnlocked(
           updated_at = now()
       where id = ${packRow.id}
     `;
+    // A phone that joined someone else's shared package and now binds to its OWN package leaves the
+    // shared one, so it never holds a slot in two packages. Not done for a package this device paid
+    // for or whose account is signed in here (a host buying for another number keeps its own).
+    if (String(pay.device_token ?? "") === device.token) {
+    await sql`
+      delete from customer_package_devices
+      where device_token = ${device.token}
+        and customer_package_id in (
+          select cp.id from customer_packages cp
+          where cp.customer_id <> ${pay.customer_id}
+            and cp.status in ('ACTIVE', 'QUEUED')
+            and cp.payment_id not in (select id from payments where device_token = ${device.token})
+            and cp.customer_id not in (select customer_id from customer_sessions where device_token = ${device.token})
+        )
+    `;
+    }
     packRow = (await sql<SqlRow>`
       select cp.*, pkg.name as package_name
       from customer_packages cp join packages pkg on pkg.id = cp.package_id
@@ -563,7 +652,9 @@ async function activateFromPaymentUnlocked(
       update payments set activation_status = 'ACTIVATED', updated_at = now()
       where id = ${paymentId}
     `;
-    return { ok: true, pack: mapCustomerPackage(packRow) };
+    // Paid and running, but the router never put THIS phone online (no MAC/IP, e.g. opened from the
+    // installed app instead of the router's login page). The caller must not say "you are online".
+    return { ok: true, pack: mapCustomerPackage(packRow), routerLoginFailed: true };
   }
 
   const sessionId = nid("ses");
@@ -754,4 +845,34 @@ export async function tickLiveUsage() {
       }
     }),
   );
+}
+
+/**
+ * A phone has just reached the router (portal visit / auto-reconnect / account sign-in):
+ * start the paid-while-away package that was waiting for it. Only the device that paid
+ * (or the signed-in account that owns the package) can start it. One package per call.
+ */
+export async function startAwaitingForDevice(
+  token: string,
+  opts?: { customerId?: string | null; siteId?: string | null },
+): Promise<boolean> {
+  const sql = await getSql();
+  const rows = await sql<{ payment_id: string }>`
+    select cp.payment_id
+    from customer_packages cp
+    join payments p on p.id = cp.payment_id
+    join customers c on c.id = cp.customer_id
+    where cp.status = 'QUEUED' and cp.activation_status = 'AWAITING_DEVICE'
+      and cp.start_time <= now() and c.status != 'BLOCKED'
+      and (p.device_token = ${token}
+           or (${opts?.customerId ?? null}::text is not null and cp.customer_id = ${opts?.customerId ?? null}))
+    order by cp.start_time asc
+    limit 1
+  `;
+  if (!rows[0]) return false;
+  if (!(await hasFreshContext(token))) return false;
+  const res = await activateFromPayment(String(rows[0].payment_id), { token, siteId: opts?.siteId ?? null }, {
+    promote: true,
+  });
+  return res.ok && !res.queued;
 }

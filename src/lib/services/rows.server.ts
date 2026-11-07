@@ -98,8 +98,11 @@ export function mapSettings(row: SqlRow): Settings {
     parallelDevicePackages:
       row.parallel_device_packages == null ? true : asBool(row.parallel_device_packages),
     maxDevicesPerPackage: asNumber(row.max_devices_per_package, 1),
+    payAwayMode:
+      row.pay_away_mode === "off" || row.pay_away_mode === "queue" ? row.pay_away_mode : "block",
     maintenanceMode: asBool(row.maintenance_mode),
     maintenanceMessage: row.maintenance_message ? String(row.maintenance_message) : null,
+    routerLoginUrl: row.router_login_url ? String(row.router_login_url) : null,
     supportPhone: row.support_phone ? String(row.support_phone) : null,
     supportWhatsapp: row.support_whatsapp ? String(row.support_whatsapp) : null,
     supportMessage: row.support_message ? String(row.support_message) : null,

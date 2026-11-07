@@ -70,3 +70,16 @@ export function readSite(): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * Where "Connect to the Wi-Fi" sends the customer: the router's own hotspot login page, which
+ * redirects back to this app with the phone's MAC and IP (the router's login.html does that).
+ * Returns null when the operator has not set the address.
+ */
+export function wifiLoginHref(routerLoginUrl: string | null | undefined): string | null {
+  if (!routerLoginUrl || typeof window === "undefined") return null;
+  const site = readSite();
+  const back = `${window.location.origin}/portal${site ? `?site=${encodeURIComponent(site)}` : ""}`;
+  const sep = routerLoginUrl.includes("?") ? "&" : "?";
+  return `${routerLoginUrl}${sep}dst=${encodeURIComponent(back)}`;
+}

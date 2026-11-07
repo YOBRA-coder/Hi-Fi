@@ -62,8 +62,10 @@ function SettingsPage() {
     oneDevicePerPackage: true,
     parallelDevicePackages: true,
     maxDevicesPerPackage: 1 as 1 | 2,
+    payAwayMode: "block" as "off" | "block" | "queue",
     maintenanceMode: false,
     maintenanceMessage: "",
+    routerLoginUrl: "",
     supportPhone: "",
     supportWhatsapp: "",
     supportMessage: "",
@@ -109,8 +111,10 @@ function SettingsPage() {
       oneDevicePerPackage: q.data.oneDevicePerPackage,
       parallelDevicePackages: q.data.parallelDevicePackages ?? true,
       maxDevicesPerPackage: q.data.maxDevicesPerPackage >= 2 ? 2 : 1,
+      payAwayMode: q.data.payAwayMode ?? "block",
       maintenanceMode: q.data.maintenanceMode,
       maintenanceMessage: q.data.maintenanceMessage ?? "",
+      routerLoginUrl: q.data.routerLoginUrl ?? "",
       supportPhone: q.data.supportPhone ?? "",
       supportWhatsapp: q.data.supportWhatsapp ?? "",
       supportMessage: q.data.supportMessage ?? "",
@@ -374,6 +378,41 @@ function SettingsPage() {
             onCheckedChange={(v) => setForm({ ...form, parallelDevicePackages: v })}
           />
         ) : null}
+        <Field label="Paying from the link, away from the router">
+          <select
+            className="h-10 w-full rounded-md border border-border bg-raised px-3 text-sm"
+            value={form.payAwayMode}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                payAwayMode:
+                  e.target.value === "off" || e.target.value === "queue" ? e.target.value : "block",
+              })
+            }
+          >
+            <option value="block">Block: ask them to connect to the Wi-Fi first (recommended)</option>
+            <option value="queue">Queue: take the payment, start the clock when they reach the router</option>
+            <option value="off">Off: start the package immediately (old behaviour)</option>
+          </select>
+        </Field>
+        <Field label="Router login page address (for the installed app)">
+          <Input
+            value={form.routerLoginUrl}
+            placeholder="http://hotspot.wifi/login"
+            onChange={(e) => setForm({ ...form, routerLoginUrl: e.target.value })}
+          />
+        </Field>
+        <p className="text-xs text-subtle">
+          The installed app is not sent through the router's login page, so the router never tells us
+          the phone's MAC and IP. With this address set, the app shows a "Connect to the Wi-Fi" button
+          that goes through the router and comes back. Use your hotspot's own address or DNS name
+          followed by /login.
+        </p>
+        <p className="text-xs text-subtle">
+          A phone counts as "at the router" if it opened the router's login page in the last 30 minutes.
+          Queued payments start when that phone next reaches the router and the customer opens the
+          portal (or taps "Already paid?" and enters the M-Pesa code).
+        </p>
         {form.oneDevicePerPackage ? (
           <p className="text-xs text-subtle">
             How many devices each package allows (1 or 2) is set per package

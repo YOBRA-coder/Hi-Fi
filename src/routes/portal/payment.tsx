@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDevice } from "@/hooks/use-device";
-import { readSite } from "@/lib/device";
+import { readSite, wifiLoginHref } from "@/lib/device";
 import { formatDuration, formatKes, formatSpeed } from "@/lib/format";
 import { getPortalBootstrap, startPayment } from "@/lib/fn/portal";
 import { formatPhoneDisplay, isKenyanPhone } from "@/lib/phone";
@@ -32,6 +32,7 @@ function PaymentPage() {
   const [phone, setPhone] = useState("");
   const [referralCode, setReferralCode] = useState(() => ref.toUpperCase());
   const [error, setError] = useState<string | null>(null);
+  const [notAtRouter, setNotAtRouter] = useState(false);
 
   useEffect(() => {
     if (device?.phone) {
@@ -67,7 +68,9 @@ function PaymentPage() {
           site: readSite(),
         },
       });
+      setNotAtRouter(false);
       if (!res.ok) {
+        if ("notAtRouter" in res && res.notAtRouter) setNotAtRouter(true);
         if ("accountRequired" in res && res.accountRequired) {
           navigate({
             to: "/portal/auth",
@@ -160,6 +163,11 @@ function PaymentPage() {
           </div>
         ) : null}
         {error && <p className="text-sm text-danger">{error}</p>}
+        {notAtRouter && wifiLoginHref(settings.routerLoginUrl) ? (
+          <Button asChild type="button" variant="secondary" size="lg" className="w-full">
+            <a href={wifiLoginHref(settings.routerLoginUrl) ?? "#"}>Connect to the Wi-Fi</a>
+          </Button>
+        ) : null}
         <Button
           type="submit"
           variant="mpesa"

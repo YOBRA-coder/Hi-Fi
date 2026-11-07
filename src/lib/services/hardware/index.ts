@@ -18,6 +18,7 @@ import type { RouterProbe } from "@/lib/types";
 import { asHardwareType, parseHwConfig, type HardwareType } from "@/lib/hardware";
 import {
   disableUser as legacyDisableUser,
+  disconnectMac as legacyDisconnectMac,
   disconnectUser as legacyDisconnectUser,
   getRouterCredentials,
   getRouterCredentialsById,
@@ -27,6 +28,7 @@ import {
 import { omadaDriver } from "./omada.driver";
 import { ruijieDriver } from "./ruijie.driver";
 import { findClientContext, adoptMacIdentity } from "./context.server";
+export { hasFreshContext } from "./context.server";
 import {
   HardwareError,
   emptyProbe,
@@ -236,6 +238,37 @@ export async function disconnectUser(username: string): Promise<void> {
   // A customer can also exist on a MikroTik site (mixed deployments): best effort.
   if (await hasMikroTik()) await legacyDisconnectUser(username).catch(() => {});
   if (firstError) throw firstError;
+}
+
+/**
+ * Switch off ONE phone that shares a login with another (a package shared by two devices).
+ * Needs the phone's MAC, which is known from its router visit. Returns false when the phone
+ * could not be targeted (never seen at the router, or the router connection cannot do it);
+ * the caller then tells the owner it may stay online until its session ends.
+ */
+export async function disconnectDevice(deviceToken: string, username: string): Promise<boolean> {
+  const ctx = await findClientContext({ deviceToken });
+  if (!ctx) return false;
+  const sql = await getSql();
+  let done = false;
+  const rows = await sql<Record<string, unknown>>`
+    select * from hw_authorizations
+    where mac_norm = ${ctx.macNorm} and username = ${username} and status = 'ACTIVE'
+  `;
+  for (const row of rows) {
+    const auth = mapAuth(row);
+    const router = await getHwRouter(auth.routerId);
+    const driver = router ? getDriver(router.type) : null;
+    if (router && driver) {
+      await driver.deauthorize(router, auth);
+      await sql`update hw_authorizations set status = 'ENDED', ended_at = now() where id = ${auth.id}`;
+      done = true;
+    }
+  }
+  if (rows.length === 0 && (await hasMikroTik())) {
+    done = await legacyDisconnectMac(ctx.clientMac).catch(() => false);
+  }
+  return done;
 }
 
 /**

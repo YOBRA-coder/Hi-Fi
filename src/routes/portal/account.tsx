@@ -9,7 +9,7 @@ import { formatPhoneDisplay } from "@/lib/phone";
 import { formatRemaining, formatSpeed, formatStamp } from "@/lib/format";
 import { APP_NAME } from "@/lib/brand-copy";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
-import { createShareCode, getAccount } from "@/lib/fn/portal";
+import { createShareCode, getAccount, leavePackage, removeDevice } from "@/lib/fn/portal";
 
 export const Route = createFileRoute("/portal/account")({
   component: AccountPage,
@@ -46,6 +46,27 @@ function AccountPage() {
       }
     },
     onError: () => setShareError("Could not create a code. Try again."),
+  });
+  const [deviceMsg, setDeviceMsg] = useState<string | null>(null);
+  const afterDeviceChange = (r: { ok: boolean; kicked?: boolean; error?: string }) => {
+    setDeviceMsg(
+      r.ok
+        ? r.kicked
+          ? "Device removed and disconnected."
+          : "Device removed. It may stay online until its current session ends."
+        : (r.error ?? "Could not remove the device."),
+    );
+    void q.refetch();
+  };
+  const remove = useMutation({
+    mutationFn: (ref: string) => removeDevice({ data: { token: device!.token, ref } }),
+    onSuccess: afterDeviceChange,
+    onError: () => setDeviceMsg("Could not remove the device. Try again."),
+  });
+  const leave = useMutation({
+    mutationFn: () => leavePackage({ data: { token: device!.token } }),
+    onSuccess: afterDeviceChange,
+    onError: () => setDeviceMsg("Could not leave the package. Try again."),
   });
   const access = q.data?.access;
   const devices = q.data?.devices ?? [];
@@ -130,12 +151,53 @@ function AccountPage() {
                       <span className="truncate">
                         {d.isThisDevice ? "This device" : d.info ?? "Unknown device"}
                       </span>
-                      <span>{formatStamp(d.boundAt)}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span>{formatStamp(d.boundAt)}</span>
+                        {d.canRemove ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={remove.isPending}
+                            onClick={() => {
+                              if (window.confirm("Remove this device from your package?")) remove.mutate(d.ref);
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        ) : null}
+                        {d.canLeave ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={leave.isPending}
+                            onClick={() => {
+                              if (window.confirm("Leave this package? This phone will go offline.")) leave.mutate();
+                            }}
+                          >
+                            Leave
+                          </Button>
+                        ) : null}
+                      </span>
                     </li>
                   ))}
                 </ul>
               ) : null}
-              {devices.length < maxDevices ? (
+              {deviceMsg ? <p className="mt-2 text-xs text-muted">{deviceMsg}</p> : null}
+              {devices.length < maxDevices && !member?.registered ? (
+                <p className="mt-2 text-xs text-muted">
+                  <Link
+                    to="/portal/auth"
+                    search={{ mode: "signin", ref: "", next: "/portal/account" }}
+                    className="text-accent"
+                  >
+                    Sign in
+                  </Link>{" "}
+                  to your account to share this package with another phone.
+                </p>
+              ) : null}
+              {devices.length < maxDevices && member?.registered && q.data?.isOwner ? (
                 <div className="mt-2 text-xs text-muted">
                   <p>
                     To add another phone, tap Share code here, then on that phone open{" "}
@@ -209,7 +271,7 @@ function QueuedCard({
   queued,
   count,
 }: {
-  queued: { packageName: string; startTime: string; expiryTime: string }[];
+  queued: { packageName: string; startTime: string; expiryTime: string; awaiting?: boolean }[];
   count: number;
 }) {
   return (
@@ -219,8 +281,10 @@ function QueuedCard({
         <ul className="mt-2 space-y-1.5 text-xs text-subtle">
           {queued.map((qp, i) => (
             <li key={i}>
-              <span className="font-medium text-fg">{qp.packageName}</span> — starts{" "}
-              {formatStamp(qp.startTime)}, ends {formatStamp(qp.expiryTime)}
+              <span className="font-medium text-fg">{qp.packageName}</span> —{" "}
+              {qp.awaiting
+                ? "waiting for you to connect to the Wi-Fi (the clock has not started)"
+                : `starts ${formatStamp(qp.startTime)}, ends ${formatStamp(qp.expiryTime)}`}
             </li>
           ))}
         </ul>

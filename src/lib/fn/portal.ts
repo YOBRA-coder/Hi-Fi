@@ -5,8 +5,21 @@ import { nid, iso } from "@/lib/utils";
 import { normalizeKenyanPhone } from "@/lib/phone";
 import { initiateStkPush, queryStkStatus } from "@/lib/services/mpesa.server";
 import { redeemVoucher } from "@/lib/services/vouchers.server";
-import { activateFromPayment, reconnectCustomer } from "@/lib/services/activation.server";
+import {
+  activateFromPayment,
+  reconnectCustomer,
+  startAwaitingForDevice,
+} from "@/lib/services/activation.server";
 import { expireDuePackages } from "@/lib/services/expiry.server";
+import { AWAY_BLOCK_MESSAGE, awayGate } from "@/lib/services/presence.server";
+import {
+  canManageDevices,
+  deviceMayActFor,
+  deviceRef,
+  isOwnerSession,
+  payerToken,
+  removeBoundDevice,
+} from "@/lib/services/device-share.server";
 import {
   findCustomerByReferralCode,
   redeemPointsForPackage,
@@ -37,7 +50,12 @@ import {
 import type { ActiveAccess, Package } from "@/lib/types";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
 import { isInternetUp } from "@/lib/services/capacity.server";
-import { adoptMacIdentity, bindClientContext, takeHandoffUrl } from "@/lib/services/hardware";
+import {
+  adoptMacIdentity,
+  bindClientContext,
+  hasFreshContext,
+  takeHandoffUrl,
+} from "@/lib/services/hardware";
 
 const identitySchema = z.object({
   token: z.string().min(8).max(80),
@@ -92,6 +110,7 @@ async function loadCatalog(siteSlug?: string | null) {
       demoMode: false,
       maintenanceMode: settings.maintenanceMode,
       maintenanceMessage: settings.maintenanceMessage,
+      routerLoginUrl: settings.routerLoginUrl,
       supportPhone: settings.supportPhone,
       supportWhatsapp: settings.supportWhatsapp,
       supportMessage: settings.supportMessage,
@@ -192,10 +211,16 @@ async function activePackageMaxDevices(customerId: string): Promise<number> {
 /** Every package queued behind the customer's current one, in start order. */
 async function queuedPackages(
   customerId: string,
-): Promise<{ packageName: string; startTime: string; expiryTime: string }[]> {
+): Promise<{ packageName: string; startTime: string; expiryTime: string; awaiting: boolean }[]> {
   const sql = await getSql();
-  const rows = await sql<{ package_name: string; start_time: string; expiry_time: string }>`
-    select pkg.name as package_name, cp.start_time, cp.expiry_time
+  const rows = await sql<{
+    package_name: string;
+    start_time: string;
+    expiry_time: string;
+    awaiting: boolean;
+  }>`
+    select pkg.name as package_name, cp.start_time, cp.expiry_time,
+           (cp.activation_status = 'AWAITING_DEVICE') as awaiting
     from customer_packages cp
     join packages pkg on pkg.id = cp.package_id
     where cp.customer_id = ${customerId} and cp.status = 'QUEUED'
@@ -205,6 +230,7 @@ async function queuedPackages(
     packageName: String(r.package_name),
     startTime: iso(r.start_time),
     expiryTime: iso(r.expiry_time),
+    awaiting: Boolean(r.awaiting),
   }));
 }
 
@@ -360,6 +386,14 @@ export const startPayment = createServerFn({ method: "POST" })
       }
     }
 
+    // Paying from the link while the phone is not at the router: the package would start,
+    // its clock would run, and nobody could use it. Block (default) or park it (queue).
+    const gate = await awayGate(data.token);
+    if (gate.blocked) {
+      return { ok: false as const, notAtRouter: true as const, error: AWAY_BLOCK_MESSAGE };
+    }
+    const payAway = gate.away;
+
     const existing = await sql<{ id: string; status: string }>`
       select id, status from customers where phone = ${phone} limit 1
     `;
@@ -502,10 +536,10 @@ export const startPayment = createServerFn({ method: "POST" })
     await sql`
       insert into payments (
         id, customer_id, package_id, checkout_request_id, merchant_request_id,
-        phone, amount, status, activation_status, site_id, device_token
+        phone, amount, status, activation_status, site_id, device_token, away
       ) values (
         ${paymentId}, ${customerId}, ${pkg.id}, ${stk.checkoutRequestId},
-        ${stk.merchantRequestId}, ${phone}, ${pkg.price}, 'PENDING', 'NOT_ACTIVATED', ${paySiteId}, ${data.token}
+        ${stk.merchantRequestId}, ${phone}, ${pkg.price}, 'PENDING', 'NOT_ACTIVATED', ${paySiteId}, ${data.token}, ${payAway}
       )
     `;
 
@@ -640,7 +674,13 @@ export const recoverPackage = createServerFn({ method: "POST" })
       limit 1
     `;
     const pack = packs[0];
-    if (pack && (String(pack.status) === "EXPIRED" || new Date(String(pack.expiry_time)).getTime() <= Date.now())) {
+    // A package waiting for its phone has a placeholder end time that must not count as expiry.
+    const waitingForPhone = Boolean(pack && String(pack.activation_status) === "AWAITING_DEVICE");
+    if (
+      pack &&
+      !waitingForPhone &&
+      (String(pack.status) === "EXPIRED" || new Date(String(pack.expiry_time)).getTime() <= Date.now())
+    ) {
       return {
         ok: false as const,
         code: "expired" as const,
@@ -659,7 +699,9 @@ export const recoverPackage = createServerFn({ method: "POST" })
     return {
       ok: true as const,
       message: activation.queued
-        ? "Payment confirmed. Your package is queued and will activate automatically when your current one ends."
+        ? activation.awaiting
+          ? "Payment confirmed. Your package starts as soon as you are connected to the Wi-Fi: open the login page and tap Already paid? again."
+          : "Payment confirmed. Your package is queued and will activate automatically when your current one ends."
         : "Payment confirmed. Reconnecting your package...",
       alreadyActive: Boolean(
         String(row.activation_status) === "ACTIVATED" &&
@@ -717,6 +759,23 @@ export const connectActive = createServerFn({ method: "POST" })
       return { ok: false as const, error: "No active package found on this device." };
     }
 
+    // Knowing a phone number is not enough to take a free slot of someone's package: this device
+    // must already belong to that customer. A second phone joins with a share code (Add a device).
+    if (!(await deviceMayActFor(data.token, customerId))) {
+      return {
+        ok: false as const,
+        code: "not_yours" as const,
+        error:
+          "This device is not linked to that package. Ask the owner for a share code and use Add a device, or use Already paid? with your M-Pesa code.",
+      };
+    }
+
+    // Paid while away from the router: the phone is here now, so start that package.
+    await startAwaitingForDevice(data.token, {
+      customerId: (await isOwnerSession(data.token, customerId)) ? customerId : null,
+      siteId: visitSiteId,
+    }).catch(() => false);
+
     const result = await reconnectCustomer(customerId, {
       token: data.token,
       info: data.deviceInfo,
@@ -748,6 +807,14 @@ export const connectActive = createServerFn({ method: "POST" })
         code: "router" as const,
         error:
           "Payment received. Your package could not be activated yet. Please use 'Already Paid?' to reconnect.",
+      };
+    }
+    if ("routerLoginFailed" in result && result.routerLoginFailed) {
+      return {
+        ok: false as const,
+        code: "router" as const,
+        error:
+          "Your package is active, but we can't see this phone on the Wi-Fi yet. Join the Wi-Fi, then tap Connect to the Wi-Fi (or open any website to reach the login page).",
       };
     }
     return {
@@ -790,19 +857,40 @@ export const getAccount = createServerFn({ method: "POST" })
     const settings = await getSettings();
     const member = await getSessionCustomer(data.token);
 
-    let devices: { info: string | null; boundAt: string; isThisDevice: boolean }[] = [];
+    let devices: {
+      ref: string;
+      info: string | null;
+      boundAt: string;
+      isThisDevice: boolean;
+      isPayer: boolean;
+      canRemove: boolean;
+      canLeave: boolean;
+    }[] = [];
     let maxDevicesPerPackage = 1;
+    let isOwner = false;
     if (access) {
       const rows = await sql<{ device_token: string; device_info: string | null; bound_at: string }>`
         select device_token, device_info, bound_at from customer_package_devices
         where customer_package_id = ${access.pack.id}
         order by bound_at asc
       `;
-      devices = rows.map((r) => ({
-        info: r.device_info,
-        boundAt: r.bound_at,
-        isThisDevice: r.device_token === data.token,
-      }));
+      const payer = await payerToken(access.pack.id);
+      const signedInOwner = await isOwnerSession(data.token, access.customer.id);
+      isOwner = signedInOwner || (payer !== null && payer === data.token);
+      devices = rows.map((r) => {
+        const isPayer = payer !== null && r.device_token === payer;
+        const isThis = r.device_token === data.token;
+        return {
+          ref: deviceRef(access.pack.id, r.device_token),
+          info: r.device_info,
+          boundAt: r.bound_at,
+          isThisDevice: isThis,
+          isPayer,
+          // The owner can remove any device except the one that paid; a joined device can leave by itself.
+          canRemove: isOwner && !isPayer && !isThis,
+          canLeave: isThis && !isOwner && !isPayer,
+        };
+      });
       maxDevicesPerPackage = await activePackageMaxDevices(access.customer.id);
     }
     // Queued packages are looked up by customer, NOT gated on an ACTIVE
@@ -817,8 +905,10 @@ export const getAccount = createServerFn({ method: "POST" })
     return {
       access,
       hotspotName: settings.hotspotName,
+      routerLoginUrl: settings.routerLoginUrl,
       currency: settings.currency,
       devices,
+      isOwner,
       maxDevicesPerPackage,
       queued,
       queuedCount: Math.max(queued.length, Number(queuedPayments[0]?.n ?? 0)),
@@ -1048,6 +1138,16 @@ export const createShareCode = createServerFn({ method: "POST" })
   .validator((data: unknown) => z.object({ token: z.string().min(8).max(80) }).parse(data))
   .handler(async ({ data }) => {
     const sql = await getSql();
+    // Sharing hands out a slot of the owner's paid package, so the owner must be signed in to
+    // their account on this phone (a joined phone cannot hand the slot on).
+    const member = await getSessionCustomer(data.token);
+    if (!member?.registered) {
+      return {
+        ok: false as const,
+        signInRequired: true as const,
+        error: "Sign in to your account on this phone to share your package.",
+      };
+    }
     // Only a device that is bound to (or is the registered device of) a RUNNING package may share it.
     const owner = await sql<{ customer_id: string; cp_id: string; max_devices: number; bound: number }>`
       select cp.customer_id, cp.id as cp_id, pkg.max_devices,
@@ -1056,6 +1156,7 @@ export const createShareCode = createServerFn({ method: "POST" })
       join packages pkg on pkg.id = cp.package_id
       join customers c on c.id = cp.customer_id
       where cp.status = 'ACTIVE' and cp.expiry_time > now()
+        and cp.customer_id = ${member.id}
         and (
           c.device_token = ${data.token}
           or cp.id in (select customer_package_id from customer_package_devices where device_token = ${data.token})
@@ -1214,6 +1315,80 @@ export const joinHostPackage = createServerFn({ method: "POST" })
   });
 
 
+/** Look up the running package this device belongs to, for the device-management calls. */
+async function packageForDevice(token: string) {
+  const sql = await getSql();
+  const rows = await sql<{ id: string; customer_id: string; mikrotik_username: string | null }>`
+    select cp.id, cp.customer_id, cp.mikrotik_username
+    from customer_packages cp
+    left join customers c on c.id = cp.customer_id
+    where cp.status = 'ACTIVE' and cp.expiry_time > now()
+      and (
+        cp.id in (select customer_package_id from customer_package_devices where device_token = ${token})
+        or c.device_token = ${token}
+      )
+    order by cp.expiry_time desc
+    limit 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * Owner removes another phone from the package. Frees its slot and switches only that
+ * phone off. The owner = the signed-in account, or the phone that paid; the payer phone
+ * itself cannot be removed (the package is its own).
+ */
+export const removeDevice = createServerFn({ method: "POST" })
+  .validator((data: unknown) =>
+    z.object({ token: z.string().min(8).max(200), ref: z.string().min(8).max(40) }).parse(data),
+  )
+  .handler(async ({ data }) => {
+    const pack = await packageForDevice(data.token);
+    if (!pack) return { ok: false as const, error: "No running package found on this device." };
+    if (!(await canManageDevices(data.token, pack))) {
+      return { ok: false as const, error: "Only the owner of this package can remove devices." };
+    }
+    const sql = await getSql();
+    const bound = await sql<{ device_token: string }>`
+      select device_token from customer_package_devices where customer_package_id = ${pack.id}
+    `;
+    const target = bound.find((r) => deviceRef(pack.id, r.device_token) === data.ref);
+    if (!target) return { ok: false as const, error: "That device is no longer on this package." };
+    const payer = await payerToken(pack.id);
+    if (target.device_token === data.token || (payer !== null && target.device_token === payer)) {
+      return { ok: false as const, error: "You cannot remove the device that owns this package." };
+    }
+    const { kicked } = await removeBoundDevice(pack, target.device_token, "owner");
+    return { ok: true as const, kicked };
+  });
+
+/** A joined phone leaves the shared package by itself, freeing the slot. The owner phone cannot leave. */
+export const leavePackage = createServerFn({ method: "POST" })
+  .validator((data: unknown) => z.object({ token: z.string().min(8).max(200) }).parse(data))
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const rows = await sql<{ id: string; customer_id: string; mikrotik_username: string | null }>`
+      select cp.id, cp.customer_id, cp.mikrotik_username
+      from customer_packages cp
+      join customer_package_devices d on d.customer_package_id = cp.id
+      where d.device_token = ${data.token} and cp.status = 'ACTIVE' and cp.expiry_time > now()
+      order by cp.expiry_time desc
+      limit 1
+    `;
+    const pack = rows[0];
+    if (!pack) return { ok: false as const, error: "This device is not on a running package." };
+    const payer = await payerToken(pack.id);
+    if ((payer !== null && payer === data.token) || (await isOwnerSession(data.token, pack.customer_id))) {
+      return {
+        ok: false as const,
+        error: "This is the owner's device. Remove the other devices first, or let the package finish.",
+      };
+    }
+    const { kicked } = await removeBoundDevice(pack, data.token, "self");
+    return { ok: true as const, kicked };
+  });
+
+
 export const redeemVoucherPortal = createServerFn({ method: "POST" })
   .validator((data: unknown) =>
     z
@@ -1283,8 +1458,13 @@ export const bindHardwareClient = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     // MikroTik: the phone's MAC becomes its identity (stable across popup sessions).
     const token = await adoptMacIdentity(data.ctx, data.token).catch(() => null);
-    if (token) return { ok: true, token };
-    return { ok: await bindClientContext(data.ctx, data.token), token: null as string | null };
+    if (token) {
+      await startAwaitingForDevice(token).catch(() => false);
+      return { ok: true, token };
+    }
+    const bound = await bindClientContext(data.ctx, data.token);
+    if (bound) await startAwaitingForDevice(data.token).catch(() => false);
+    return { ok: bound, token: null as string | null };
   });
 
 /**

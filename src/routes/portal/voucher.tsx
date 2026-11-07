@@ -41,7 +41,9 @@ function VoucherRedeem() {
       setError(null);
       update({ phone: formatPhoneDisplay(phone) });
       setOk(
-        res.queued
+        res.awaiting
+          ? `Redeemed ${res.packageName}. It starts as soon as you are connected to the Wi-Fi.`
+          : res.queued
           ? `Redeemed ${res.packageName}. You still have time left on your current package — this one is queued and will activate automatically when it ends.`
           : res.activationOk
             ? `Redeemed ${res.packageName}. You're online.`

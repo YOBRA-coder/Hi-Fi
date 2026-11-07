@@ -13,7 +13,7 @@ import {
   Users,
   Wifi,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { SiteSwitcher } from "@/components/admin/site-switcher";
 import { Badge } from "@/components/ui/badge";
@@ -60,14 +60,6 @@ const TONE: Record<HealthState, "ok" | "warn" | "danger" | "neutral"> = {
   UNKNOWN: "neutral",
 };
 
-/**
- * Every card on this page uses this so nothing can be wider than the screen:
- * w-full + max-w-full + min-w-0 stops grid/flex children growing to fit their content,
- * overflow-hidden clips anything that still tries, and [overflow-wrap:anywhere] lets
- * long hostnames / MACs / IPs break instead of pushing the layout sideways.
- */
-const CARD = "w-full min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere]";
-
 function Dot({ state, className }: { state: HealthState; className?: string }) {
   return (
     <span
@@ -97,17 +89,6 @@ function NetworkMapPage() {
   const [apOpen, setApOpen] = useState(false);
   const [apForm, setApForm] = useState(emptyAp(""));
   const [days, setDays] = useState(30);
-  const detailsRef = useRef<HTMLDivElement>(null);
-
-  // On phones the details sit below the topology, so bring them into view after a tap.
-  const pickRouter = (id: string) => {
-    setSelectedId(id);
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
-      requestAnimationFrame(() =>
-        detailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
-    }
-  };
 
   const key = ["network-map", siteId, days] as const;
   // Cheap read of the stored snapshot; the refresh below reads the routers.
@@ -174,15 +155,14 @@ function NetworkMapPage() {
   const routerForm = allRouters.find((r) => r.id === apForm.mikrotikId);
 
   return (
-    <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-clip md:space-y-5 [&>*]:min-w-0 [&>*]:max-w-full">
-      {/* Header */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <h1 className="font-display text-2xl font-semibold tracking-tight sm:text-3xl">Network map</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight">Network map</h1>
+          <p className="mt-1 flex items-center gap-2 text-sm text-muted">
             <span
               className={cn(
-                "inline-block size-2 shrink-0 rounded-full",
+                "inline-block size-2 rounded-full",
                 refresh.isError ? "bg-danger" : "bg-ok",
                 refresh.isPending && "animate-pulse",
               )}
@@ -191,36 +171,27 @@ function NetworkMapPage() {
             {d ? ` · updated ${new Date(d.generatedAt).toLocaleTimeString()}` : ""}
           </p>
         </div>
-        <div className="flex w-full min-w-0 max-w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 lg:w-auto">
-          <div className="w-full min-w-0 max-w-full sm:w-auto">
-            <SiteSwitcher />
-          </div>
-          <label className="flex items-center justify-between gap-2 text-sm text-muted sm:justify-start">
+        <div className="flex flex-wrap items-center gap-3">
+          <SiteSwitcher />
+          <label className="flex items-center gap-2 text-sm text-muted">
             Auto refresh
             <Switch checked={auto} onCheckedChange={setAuto} />
           </label>
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:gap-3">
-            <Button
-              variant="outline"
-              className="min-w-0"
-              onClick={() => refresh.mutate()}
-              disabled={refresh.isPending}
-            >
-              <RefreshCw className={cn("size-4 shrink-0", refresh.isPending && "animate-spin")} />
-              <span className="truncate">Refresh now</span>
-            </Button>
-            <Button variant="outline" className="min-w-0" asChild>
-              <Link to="/admin/network">Manage</Link>
-            </Button>
-          </div>
+          <Button variant="outline" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            <RefreshCw className={cn("size-4", refresh.isPending && "animate-spin")} />
+            Refresh now
+          </Button>
+          <Button variant="outline" asChild>
+            <Link to="/admin/network">Manage</Link>
+          </Button>
         </div>
       </div>
 
       {/* Summary cards — follow the selected site */}
-      <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Summary
-          icon={<RouterIcon className="size-4 shrink-0" />}
-          title="Routers"
+          icon={<RouterIcon className="size-4" />}
+          title="Routers & gateways"
           value={String((t?.routers.online ?? 0) + (t?.routers.warning ?? 0) + (t?.routers.offline ?? 0))}
           chips={[
             ["ONLINE", t?.routers.online ?? 0],
@@ -229,7 +200,7 @@ function NetworkMapPage() {
           ]}
         />
         <Summary
-          icon={<Wifi className="size-4 shrink-0" />}
+          icon={<Wifi className="size-4" />}
           title="Access points"
           value={String((t?.aps.online ?? 0) + (t?.aps.warning ?? 0) + (t?.aps.offline ?? 0) + (t?.aps.unknown ?? 0))}
           chips={[
@@ -244,22 +215,22 @@ function NetworkMapPage() {
           }
         />
         <Summary
-          icon={<Users className="size-4 shrink-0" />}
+          icon={<Users className="size-4" />}
           title="Active users"
           value={String(t?.activeUsers ?? 0)}
           note="devices connected now (all hardware)"
         />
         <Summary
-          icon={<Globe className="size-4 shrink-0" />}
+          icon={<Globe className="size-4" />}
           title="Traffic"
           value={bps((t?.rxBps ?? 0) + (t?.txBps ?? 0))}
           note={`↓ ${bps(t?.rxBps)} · ↑ ${bps(t?.txBps)}`}
         />
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {/* Topology grouped by site/town */}
-        <Card className={cn(CARD, "p-3 sm:p-4 md:p-5")}>
+        <Card className="p-4 md:p-5">
           <h2 className="font-display text-lg font-semibold">Network topology</h2>
           <p className="text-xs text-subtle">Grouped by town. Tap a router for its details.</p>
 
@@ -274,58 +245,55 @@ function NetworkMapPage() {
               .
             </p>
           ) : (
-            <div className="mt-4 min-w-0">
-              <div className="mx-auto flex w-fit max-w-full items-center gap-2 rounded-xl border border-border bg-raised px-4 py-2 text-sm font-medium">
-                <Globe className="size-4 shrink-0 text-accent" />
+            <div className="mt-4">
+              <div className="mx-auto flex w-fit items-center gap-2 rounded-xl border border-border bg-raised px-4 py-2 text-sm font-medium">
+                <Globe className="size-4 text-accent" />
                 Internet
               </div>
               {d.sites
                 .filter((s) => s.routers.length > 0 || siteId !== "ALL")
                 .map((s) => (
-                  <div key={s.site.id} className="relative min-w-0">
+                  <div key={s.site.id} className="relative">
                     <div className="mx-auto h-4 w-px bg-border" />
-                    <div className="min-w-0 rounded-2xl border border-border p-2 sm:p-3">
-                      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-2 gap-y-1">
-                        <p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 font-display font-semibold">
+                    <div className="rounded-2xl border border-border p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="flex min-w-0 items-center gap-1.5 font-display font-semibold">
                           <MapPin className="size-4 shrink-0 text-accent" />
-                          <span className="min-w-0 break-words">{s.site.name}</span>
+                          <span className="truncate">{s.site.name}</span>
                           {s.site.status === "INACTIVE" ? <Badge tone="neutral">Inactive</Badge> : null}
                         </p>
-                        <span className="shrink-0">
-                          <Badge tone={TONE[s.state]}>{LABEL[s.state]}</Badge>
-                        </span>
+                        <Badge tone={TONE[s.state]}>{LABEL[s.state]}</Badge>
                       </div>
-                      {s.site.notes ? <p className="mt-0.5 break-words text-xs text-subtle">{s.site.notes}</p> : null}
+                      {s.site.notes ? <p className="mt-0.5 text-xs text-subtle">{s.site.notes}</p> : null}
 
-                      <div className="mt-3 min-w-0 space-y-3">
+                      <div className="mt-3 space-y-3">
                         {s.routers.length === 0 ? (
                           <p className="text-sm text-muted">No routers in this town yet.</p>
                         ) : null}
                         {s.routers.map((r) => (
-                          <div key={r.id} className="min-w-0">
+                          <div key={r.id}>
                             <button
                               type="button"
-                              onClick={() => pickRouter(r.id)}
+                              onClick={() => setSelectedId(r.id)}
                               className={cn(
-                                "block w-full min-w-0 max-w-full rounded-xl border p-2.5 text-left transition sm:p-3",
+                                "w-full rounded-xl border p-3 text-left transition",
                                 selected?.id === r.id
                                   ? "border-accent bg-accent/5"
                                   : "border-border bg-surface hover:border-accent/40",
                               )}
                             >
-                              {/* name + badges, then the state label on its own line on very small phones */}
-                              <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-2 gap-y-1">
-                                <span className="flex min-w-0 flex-1 basis-40 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium sm:text-base">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex min-w-0 items-center gap-2 font-medium">
                                   <Dot state={r.state} />
-                                  <span className="min-w-0 break-words">{r.name}</span>
+                                  <span className="truncate">{r.name}</span>
                                   {r.isPrimary ? <Badge tone="accent">Primary</Badge> : null}
                                   {r.hardwareType !== "mikrotik" ? (
                                     <Badge tone="neutral">{HARDWARE_LABELS[r.hardwareType]}</Badge>
                                   ) : null}
                                 </span>
-                                <span className="shrink-0 pt-0.5 text-xs text-muted">{LABEL[r.state]}</span>
+                                <span className="shrink-0 text-xs text-muted">{LABEL[r.state]}</span>
                               </div>
-                              <p className="mt-0.5 break-words text-xs text-subtle">
+                              <p className="mt-0.5 truncate text-xs text-subtle">
                                 {r.hardwareType === "mikrotik"
                                   ? [r.boardName, r.version ? `RouterOS ${r.version}` : null, r.host.replace(/^https?:\/\//, "")]
                                       .filter(Boolean)
@@ -338,38 +306,38 @@ function NetworkMapPage() {
                               </p>
                               {r.hardwareType !== "mikrotik" ? (
                                 <p className="mt-1 flex items-center gap-1 text-xs text-muted">
-                                  <Users className="size-3 shrink-0" />
+                                  <Users className="size-3" />
                                   {r.hwActiveDevices} device{r.hwActiveDevices === 1 ? "" : "s"} online
                                 </p>
                               ) : null}
                               <p className="mt-1 flex items-center gap-1 text-xs text-muted">
-                                <MapPin className="size-3 shrink-0" />
-                                <span className="min-w-0 break-words">{r.siteName}</span>
+                                <MapPin className="size-3" />
+                                {r.siteName}
                               </p>
                               {r.hours.enabled ? (
-                                <p className={cn("mt-1 break-words text-xs", r.hours.open ? "text-muted" : "text-warn")}>
+                                <p className={cn("mt-1 text-xs", r.hours.open ? "text-muted" : "text-warn")}>
                                   {r.hours.open
                                     ? `Open${r.hours.closesAtLabel ? ` until ${r.hours.closesAtLabel}` : ""}`
                                     : `Closed (scheduled)${r.hours.opensAtLabel ? ` · opens ${r.hours.opensAtLabel}` : ""}`}
                                 </p>
                               ) : null}
                               {r.stateReason && r.state !== "ONLINE" ? (
-                                <p className={cn("mt-1 break-words text-xs", r.state === "OFFLINE" ? "text-danger" : "text-warn")}>
+                                <p className={cn("mt-1 text-xs", r.state === "OFFLINE" ? "text-danger" : "text-warn")}>
                                   {r.stateReason}
                                 </p>
                               ) : null}
                               {r.isps.length > 0 ? (
-                                <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+                                <div className="mt-2 flex flex-wrap gap-1.5">
                                   {r.isps.map((i) => (
                                     <span
                                       key={i.id}
-                                      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
+                                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
                                     >
                                       <Dot
                                         state={i.status === "ONLINE" ? "ONLINE" : i.status === "DEGRADED" ? "WARNING" : "OFFLINE"}
                                         className="size-2"
                                       />
-                                      <span className="min-w-0 truncate">{i.name}</span>
+                                      {i.name}
                                     </span>
                                   ))}
                                 </div>
@@ -377,13 +345,13 @@ function NetworkMapPage() {
                             </button>
                             {/* Access points hang under their router */}
                             {r.aps.length > 0 ? (
-                              <ul className="ml-1.5 mt-1 min-w-0 space-y-1 border-l border-dashed border-border pl-2 sm:ml-4 sm:pl-3">
+                              <ul className="ml-4 mt-1 space-y-1 border-l border-dashed border-border pl-3">
                                 {r.aps.map((a) => (
                                   <li
                                     key={a.id}
-                                    className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded-lg bg-raised px-2.5 py-2 text-sm sm:px-3"
+                                    className="flex items-center justify-between gap-2 rounded-lg bg-raised px-3 py-2 text-sm"
                                   >
-                                    <span className="flex min-w-0 flex-1 basis-32 items-center gap-2">
+                                    <span className="flex min-w-0 items-center gap-2">
                                       <Dot state={a.noIncome ? "WARNING" : a.status} />
                                       <Wifi className="size-3.5 shrink-0 text-muted" />
                                       {a.label ? (
@@ -391,9 +359,9 @@ function NetworkMapPage() {
                                           #{a.label}
                                         </span>
                                       ) : null}
-                                      <span className="min-w-0 truncate">{a.name}</span>
+                                      <span className="truncate">{a.name}</span>
                                     </span>
-                                    <span className={cn("shrink-0 pl-5 text-xs sm:pl-0", a.noIncome ? "text-warn" : "text-muted")}>
+                                    <span className={cn("shrink-0 text-xs", a.noIncome ? "text-warn" : "text-muted")}>
                                       {a.noIncome
                                         ? "No income"
                                         : a.clients != null
@@ -404,7 +372,7 @@ function NetworkMapPage() {
                                 ))}
                               </ul>
                             ) : (
-                              <p className="ml-1.5 mt-1 border-l border-dashed border-border pl-2 text-xs text-subtle sm:ml-4 sm:pl-3">
+                              <p className="ml-4 mt-1 border-l border-dashed border-border pl-3 text-xs text-subtle">
                                 No access points added.
                               </p>
                             )}
@@ -417,18 +385,15 @@ function NetworkMapPage() {
             </div>
           )}
 
-          {/* Legend: 2 columns on phones so it never runs off the edge */}
-          <div className="mt-4 grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 rounded-lg border border-border p-3 text-xs text-muted sm:mt-5 sm:flex sm:flex-wrap sm:items-center sm:gap-x-4">
-            <span className="col-span-2 font-medium text-fg sm:col-span-1">Status</span>
+          <div className="mt-5 flex flex-wrap items-center gap-4 rounded-lg border border-border p-3 text-xs text-muted">
+            <span className="font-medium text-fg">Status</span>
             {(["ONLINE", "WARNING", "OFFLINE"] as const).map((s) => (
-              <span key={s} className="flex min-w-0 items-center gap-1.5">
+              <span key={s} className="flex items-center gap-1.5">
                 <Dot state={s} />
-                <span className="min-w-0">
-                  {s === "ONLINE" ? "Online / Healthy" : s === "WARNING" ? "Warning" : "Offline"}
-                </span>
+                {s === "ONLINE" ? "Online / Healthy" : s === "WARNING" ? "Warning" : "Offline"}
               </span>
             ))}
-            <span className="flex min-w-0 items-center gap-1.5">
+            <span className="flex items-center gap-1.5">
               <Dot state="UNKNOWN" />
               Not checked
             </span>
@@ -436,7 +401,7 @@ function NetworkMapPage() {
         </Card>
 
         {/* Details for the selected router */}
-        <div ref={detailsRef} className="min-w-0 max-w-full scroll-mt-4 space-y-4">
+        <div className="space-y-4">
           {selected ? (
             <>
               {selected.hardwareType === "mikrotik" ? <RouterStatus r={selected} /> : <VendorStatus r={selected} />}
@@ -469,15 +434,13 @@ function NetworkMapPage() {
               {selected.hardwareType === "mikrotik" ? <PortsTable r={selected} /> : null}
             </>
           ) : (
-            <Card className={cn(CARD, "p-4 text-sm text-muted sm:p-5")}>
-              Select a router or controller to see its status and access points.
-            </Card>
+            <Card className="p-5 text-sm text-muted">Select a router or controller to see its status and access points.</Card>
           )}
         </div>
       </div>
 
       <Dialog open={apOpen} onOpenChange={setApOpen}>
-        <DialogContent className="max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-md overflow-y-auto overflow-x-hidden">
+        <DialogContent className="max-h-[90dvh] max-w-md overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{apForm.id ? "Edit access point" : "Add access point"}</DialogTitle>
             <DialogDescription>
@@ -497,7 +460,7 @@ function NetworkMapPage() {
             <div className="space-y-1.5">
               <Label>Router / controller</Label>
               <select
-                className="flex h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-raised px-3 text-sm"
+                className="flex h-11 w-full rounded-md border border-border bg-raised px-3 text-sm"
                 value={apForm.mikrotikId}
                 onChange={(e) => setApForm({ ...apForm, mikrotikId: e.target.value, port: "" })}
               >
@@ -517,7 +480,7 @@ function NetworkMapPage() {
                     <button
                       key={`${n.mac}-${i}`}
                       type="button"
-                      className="max-w-full truncate rounded-full border border-border px-2.5 py-1.5 text-xs text-muted hover:border-accent hover:text-fg"
+                      className="rounded-full border border-border px-2.5 py-1 text-xs text-muted hover:border-accent hover:text-fg"
                       onClick={() =>
                         setApForm({
                           ...apForm,
@@ -538,12 +501,12 @@ function NetworkMapPage() {
               </div>
             ) : null}
 
-            <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 sm:grid-cols-[6.5rem_minmax(0,1fr)]">
-              <div className="min-w-0 space-y-1.5">
+            <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3">
+              <div className="space-y-1.5">
                 <Label htmlFor="ap-label">AP number</Label>
                 <Input id="ap-label" value={apForm.label} maxLength={20} placeholder="e.g. 3" onChange={(e) => setApForm({ ...apForm, label: e.target.value })} />
               </div>
-              <div className="min-w-0 space-y-1.5">
+              <div className="space-y-1.5">
                 <Label htmlFor="ap-name">Name</Label>
                 <Input id="ap-name" required minLength={2} value={apForm.name} placeholder="e.g. Lobby AP" onChange={(e) => setApForm({ ...apForm, name: e.target.value })} />
               </div>
@@ -552,12 +515,12 @@ function NetworkMapPage() {
               The name is how this AP is shown everywhere. If you have marked the device with a number or tag, enter it
               as the AP number so you can spot the right one on site.
             </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="min-w-0 space-y-1.5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
                 <Label htmlFor="ap-ip">IP address</Label>
                 <Input id="ap-ip" inputMode="decimal" value={apForm.ip} placeholder="192.168.88.20" onChange={(e) => setApForm({ ...apForm, ip: e.target.value })} />
               </div>
-              <div className="min-w-0 space-y-1.5">
+              <div className="space-y-1.5">
                 <Label htmlFor="ap-mac">
                   {routerForm && routerForm.hardwareType === "omada" ? "MAC (needed)" : "MAC (optional)"}
                 </Label>
@@ -569,7 +532,7 @@ function NetworkMapPage() {
               <Label htmlFor="ap-port">Router port it's plugged into</Label>
               <select
                 id="ap-port"
-                className="flex h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-raised px-3 text-sm"
+                className="flex h-11 w-full rounded-md border border-border bg-raised px-3 text-sm"
                 value={apForm.port}
                 onChange={(e) => setApForm({ ...apForm, port: e.target.value })}
               >
@@ -612,12 +575,12 @@ function Summary({
   note?: string;
 }) {
   return (
-    <Card className={cn(CARD, "p-3 sm:p-4")}>
-      <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-subtle sm:text-xs">
+    <Card className="p-4">
+      <p className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-subtle">
         {icon}
-        <span className="min-w-0 truncate">{title}</span>
+        {title}
       </p>
-      <p className="mt-1.5 break-words font-display text-xl font-semibold tabular-nums sm:mt-2 sm:text-2xl">{value}</p>
+      <p className="mt-2 font-display text-2xl font-semibold tabular-nums">{value}</p>
       {chips ? (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
           {chips.map(([s, n]) => (
@@ -628,9 +591,9 @@ function Summary({
           ))}
         </div>
       ) : (
-        <p className="mt-1.5 break-words text-xs text-muted sm:mt-2">{note}</p>
+        <p className="mt-2 text-xs text-muted">{note}</p>
       )}
-      {chips && note ? <p className="mt-1.5 break-words text-xs text-warn">{note}</p> : null}
+      {chips && note ? <p className="mt-1.5 text-xs text-warn">{note}</p> : null}
     </Card>
   );
 }
@@ -651,49 +614,49 @@ function RouterStatus({ r }: { r: MapRouter }) {
   const level = (v: number | null, warn: number): HealthState =>
     v == null ? "UNKNOWN" : v >= warn ? "WARNING" : "ONLINE";
   return (
-    <Card className={cn(CARD, "p-3 sm:p-4")}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <h2 className="flex min-w-0 flex-1 basis-40 items-center gap-2 font-display text-lg font-semibold">
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="flex min-w-0 items-center gap-2 font-display text-lg font-semibold">
           <Dot state={r.state} />
-          <span className="min-w-0 break-words">{r.name}</span>
+          <span className="truncate">{r.name}</span>
         </h2>
-        <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
-          <MapPin className="size-3 shrink-0" />
-          <span className="min-w-0 break-words">{r.siteName}</span>
+        <span className="flex items-center gap-1 text-xs text-muted">
+          <MapPin className="size-3" />
+          {r.siteName}
         </span>
       </div>
-      {l?.error ? <p className="mt-2 break-words text-sm text-danger">{l.error}</p> : null}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3">
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+      {l?.error ? <p className="mt-2 text-sm text-danger">{l.error}</p> : null}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">CPU usage</p>
           <p className="mt-1 font-display text-xl font-semibold tabular-nums">{cpu != null ? `${cpu}%` : "—"}</p>
           {cpu != null ? <Bar pct={cpu} state={level(cpu, 85)} /> : null}
         </div>
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">Memory usage</p>
           <p className="mt-1 font-display text-xl font-semibold tabular-nums">{memPct != null ? `${memPct}%` : "—"}</p>
           {memPct != null ? <Bar pct={memPct} state={level(memPct, 90)} /> : null}
           {l?.memTotal ? (
-            <p className="mt-1 break-words text-[11px] text-subtle">
+            <p className="mt-1 text-[11px] text-subtle">
               {formatBytes(l.memTotal - (l.memFree ?? 0))} / {formatBytes(l.memTotal)}
             </p>
           ) : null}
         </div>
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">Uptime</p>
-          <p className="mt-1 break-words font-display text-base font-semibold sm:text-xl">{l?.uptime ?? "—"}</p>
+          <p className="mt-1 font-display text-xl font-semibold">{l?.uptime ?? "—"}</p>
         </div>
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">Active users</p>
           <p className="mt-1 font-display text-xl font-semibold tabular-nums">{l?.activeUsers ?? "—"}</p>
           <p className="text-[11px] text-subtle">hotspot clients</p>
         </div>
       </div>
-      <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border border-border p-3 text-sm">
+      <div className="mt-3 flex items-center justify-between rounded-lg border border-border p-3 text-sm">
         <span className="text-xs text-subtle">Bandwidth (ether ports)</span>
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
-          <span className="flex items-center gap-1"><ArrowDown className="size-3.5 shrink-0 text-ok" />{bps(l?.rxBps)}</span>
-          <span className="flex items-center gap-1"><ArrowUp className="size-3.5 shrink-0 text-accent" />{bps(l?.txBps)}</span>
+        <span className="flex items-center gap-3 tabular-nums">
+          <span className="flex items-center gap-1"><ArrowDown className="size-3.5 text-ok" />{bps(l?.rxBps)}</span>
+          <span className="flex items-center gap-1"><ArrowUp className="size-3.5 text-accent" />{bps(l?.txBps)}</span>
         </span>
       </div>
     </Card>
@@ -709,36 +672,36 @@ function VendorStatus({ r }: { r: MapRouter }) {
   };
   const omada = r.hardwareType === "omada";
   return (
-    <Card className={cn(CARD, "p-3 sm:p-4")}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <h2 className="flex min-w-0 flex-1 basis-40 flex-wrap items-center gap-x-2 gap-y-1 font-display text-lg font-semibold">
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="flex min-w-0 items-center gap-2 font-display text-lg font-semibold">
           <Dot state={r.state} />
-          <span className="min-w-0 break-words">{r.name}</span>
+          <span className="truncate">{r.name}</span>
           <Badge tone="neutral">{HARDWARE_LABELS[r.hardwareType]}</Badge>
         </h2>
-        <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
-          <MapPin className="size-3 shrink-0" />
-          <span className="min-w-0 break-words">{r.siteName}</span>
+        <span className="flex items-center gap-1 text-xs text-muted">
+          <MapPin className="size-3" />
+          {r.siteName}
         </span>
       </div>
       {r.state !== "ONLINE" && r.stateReason ? (
-        <p className={cn("mt-2 break-words text-sm", r.state === "OFFLINE" ? "text-danger" : "text-warn")}>{r.stateReason}</p>
+        <p className={cn("mt-2 text-sm", r.state === "OFFLINE" ? "text-danger" : "text-warn")}>{r.stateReason}</p>
       ) : null}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3">
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">{omada ? "Controller" : "Gateway"}</p>
           <p className="mt-1 font-display text-xl font-semibold">{LABEL[r.state]}</p>
           <p className="text-[11px] text-subtle">
             {omada ? "login check every minute" : r.hwSeenAt ? `last heard ${ago(r.hwSeenAt)}` : "not heard from yet"}
           </p>
         </div>
-        <div className="min-w-0 rounded-lg border border-border p-2.5 sm:p-3">
+        <div className="rounded-lg border border-border p-3">
           <p className="text-xs text-subtle">Devices online</p>
           <p className="mt-1 font-display text-xl font-semibold tabular-nums">{r.hwActiveDevices}</p>
           <p className="text-[11px] text-subtle">switched on by a package</p>
         </div>
       </div>
-      <p className="mt-3 break-words rounded-lg border border-dashed border-border p-3 text-xs text-muted">
+      <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-xs text-muted">
         CPU, memory and port traffic are MikroTik-only. This {omada ? "controller" : "gateway"} is
         monitored by {omada ? "logging in to it" : "its check-ins to the portal"}; the portal URL to enter on the
         device is on the{" "}
@@ -777,71 +740,25 @@ function ApTable({
 }) {
   const lowEarners = findLowEarners(r.aps);
   const vendor = r.hardwareType !== "mikrotik";
-
-  const meta = (a: AccessPointRow) =>
-    [a.ip, vendor ? a.mac : null, a.model].filter(Boolean).join(" · ") || "—";
-
-  const revenueCell = (a: AccessPointRow) =>
-    a.revenue == null ? (
-      <span
-        className="text-[11px] text-subtle"
-        title={
-          r.hardwareType === "ruijie"
-            ? "Ruijie's portal protocol does not say which AP a client is on"
-            : r.hardwareType === "omada"
-              ? "Add the AP's MAC to track revenue"
-              : "Set the router port this AP is plugged into to track revenue"
-        }
-      >
-        {r.hardwareType === "ruijie" ? "n/a" : r.hardwareType === "omada" ? "add MAC" : "set port"}
-      </span>
-    ) : (
-      <>
-        <p className="font-medium">KES {a.revenue.toLocaleString()}</p>
-        <p className="text-[11px] text-subtle">{a.paidCustomers ?? 0} paying</p>
-        {a.noIncome ? (
-          <p className="text-[11px] text-warn" title={`Online, but no paying customers in the last ${days} days`}>
-            No income
-          </p>
-        ) : lowEarners.has(a.id) ? (
-          <p className="text-[11px] text-warn">Low earner</p>
-        ) : null}
-      </>
-    );
-
-  const actions = (a: AccessPointRow) =>
-    a.manual ? (
-      <span className="flex shrink-0 justify-end gap-1">
-        <button type="button" aria-label={`Edit ${a.name}`} className="rounded p-2 text-muted hover:text-fg md:p-1" onClick={() => onEdit(a)}>
-          <Pencil className="size-4" />
-        </button>
-        <button type="button" aria-label={`Remove ${a.name}`} className="rounded p-2 text-muted hover:text-danger md:p-1" onClick={() => onDelete(a)}>
-          <Trash2 className="size-4" />
-        </button>
-      </span>
-    ) : (
-      <span className="shrink-0 text-[11px] text-subtle">auto</span>
-    );
-
   return (
-    <Card className={cn(CARD, "p-3 sm:p-4")}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <h2 className="min-w-0 font-display text-lg font-semibold">Access points ({r.aps.length})</h2>
-        <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:w-auto">
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-display text-lg font-semibold">Access points ({r.aps.length})</h2>
+        <div className="flex items-center gap-2">
           <select
             aria-label="Revenue period"
             value={days}
             onChange={(e) => onDays(Number(e.target.value))}
-            className="h-10 min-w-0 rounded-md border border-border bg-raised px-2 text-sm sm:h-8 sm:text-xs"
+            className="h-8 rounded-md border border-border bg-raised px-2 text-xs"
           >
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
           </select>
-          <Button size="sm" variant="outline" className="h-10 sm:h-8" onClick={onAdd}>
-            <Plus className="size-4" />
-            Add AP
-          </Button>
+        <Button size="sm" variant="outline" onClick={onAdd}>
+          <Plus className="size-4" />
+          Add AP
+        </Button>
         </div>
       </div>
       {r.aps.length === 0 ? (
@@ -849,119 +766,104 @@ function ApTable({
           No access points on this {vendor ? "site" : "router"}. Add the APs that connect through it so they show on the map.
         </p>
       ) : (
-        <>
-          {/* Phones / small tablets: one card per AP, no sideways scrolling */}
-          <ul className="mt-3 min-w-0 space-y-2 md:hidden">
-            {r.aps.map((a) => (
-              <li key={a.id} className="min-w-0 rounded-xl border border-border p-3">
-                <div className="flex min-w-0 items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 font-medium">
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[30rem] text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-subtle">
+                <th className="py-1.5 pr-2 font-medium">Access point</th>
+                <th className="py-1.5 pr-2 font-medium">Status</th>
+                {vendor ? null : <th className="py-1.5 pr-2 font-medium">Port</th>}
+                <th className="py-1.5 pr-2 text-right font-medium">Clients</th>
+                {vendor ? null : <th className="py-1.5 pr-2 text-right font-medium">Signal</th>}
+                <th className="py-1.5 pr-2 text-right font-medium">Revenue</th>
+                <th className="w-16" />
+              </tr>
+            </thead>
+            <tbody>
+              {r.aps.map((a) => (
+                <tr key={a.id} className="border-t border-border">
+                  <td className="py-2 pr-2">
+                    <p className="flex items-center gap-1.5 font-medium">
                       {a.label ? (
-                        <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">#{a.label}</span>
+                        <span className="rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">#{a.label}</span>
                       ) : null}
-                      <span className="min-w-0 break-words">{a.name}</span>
+                      {a.name}
                     </p>
-                    <p className="mt-0.5 break-all text-xs text-subtle">{meta(a)}</p>
-                  </div>
-                  {actions(a)}
-                </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                  <div className="min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">Status</dt>
-                    <dd>
-                      <span className="flex items-center gap-1.5">
-                        <Dot state={a.noIncome ? "WARNING" : a.status} />
-                        <span className="min-w-0 break-words">{a.noIncome ? "On · no income" : LABEL[a.status]}</span>
-                      </span>
-                      {a.latencyMs != null ? <span className="text-[11px] text-subtle">{a.latencyMs} ms</span> : null}
-                    </dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">Clients</dt>
-                    <dd className="tabular-nums">{a.clients ?? "—"}</dd>
-                  </div>
+                    <p className="text-xs text-subtle">{[a.ip, vendor ? a.mac : null, a.model].filter(Boolean).join(" · ") || "—"}</p>
+                  </td>
+                  <td className="py-2 pr-2">
+                    <span className="flex items-center gap-1.5">
+                      <Dot state={a.noIncome ? "WARNING" : a.status} />
+                      {a.noIncome ? "On · no income" : LABEL[a.status]}
+                    </span>
+                    {a.latencyMs != null ? <span className="text-[11px] text-subtle">{a.latencyMs} ms</span> : null}
+                  </td>
+                  {vendor ? null : <td className="py-2 pr-2 text-muted">{a.port ?? "—"}</td>}
+                  <td className="py-2 pr-2 text-right tabular-nums">{a.clients ?? "—"}</td>
                   {vendor ? null : (
-                    <>
-                      <div className="min-w-0">
-                        <dt className="text-[11px] uppercase tracking-wide text-subtle">Port</dt>
-                        <dd className="break-words text-muted">{a.port ?? "—"}</dd>
-                      </div>
-                      <div className="min-w-0">
-                        <dt className="text-[11px] uppercase tracking-wide text-subtle">Signal</dt>
-                        <dd className="tabular-nums text-muted">{a.signalDbm != null ? `${a.signalDbm} dBm` : "—"}</dd>
-                      </div>
-                    </>
+                    <td className="py-2 pr-2 text-right tabular-nums text-muted">
+                      {a.signalDbm != null ? `${a.signalDbm} dBm` : "—"}
+                    </td>
                   )}
-                  <div className="col-span-2 min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">Revenue</dt>
-                    <dd>{revenueCell(a)}</dd>
-                  </div>
-                </dl>
-              </li>
-            ))}
-          </ul>
-
-          {/* Tablet / desktop: table */}
-          <div className="mt-3 hidden min-w-0 overflow-x-auto md:block">
-            <table className="w-full min-w-[30rem] text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-subtle">
-                  <th className="py-1.5 pr-2 font-medium">Access point</th>
-                  <th className="py-1.5 pr-2 font-medium">Status</th>
-                  {vendor ? null : <th className="py-1.5 pr-2 font-medium">Port</th>}
-                  <th className="py-1.5 pr-2 text-right font-medium">Clients</th>
-                  {vendor ? null : <th className="py-1.5 pr-2 text-right font-medium">Signal</th>}
-                  <th className="py-1.5 pr-2 text-right font-medium">Revenue</th>
-                  <th className="w-16" />
-                </tr>
-              </thead>
-              <tbody>
-                {r.aps.map((a) => (
-                  <tr key={a.id} className="border-t border-border">
-                    <td className="py-2 pr-2">
-                      <p className="flex items-center gap-1.5 font-medium">
-                        {a.label ? (
-                          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">#{a.label}</span>
-                        ) : null}
-                        {a.name}
-                      </p>
-                      <p className="text-xs text-subtle">{meta(a)}</p>
-                    </td>
-                    <td className="py-2 pr-2">
-                      <span className="flex items-center gap-1.5">
-                        <Dot state={a.noIncome ? "WARNING" : a.status} />
-                        {a.noIncome ? "On · no income" : LABEL[a.status]}
+                  <td className="py-2 pr-2 text-right tabular-nums">
+                    {a.revenue == null ? (
+                      <span
+                        className="text-[11px] text-subtle"
+                        title={
+                          r.hardwareType === "ruijie"
+                            ? "Ruijie's portal protocol does not say which AP a client is on"
+                            : r.hardwareType === "omada"
+                              ? "Add the AP's MAC to track revenue"
+                              : "Set the router port this AP is plugged into to track revenue"
+                        }
+                      >
+                        {r.hardwareType === "ruijie" ? "n/a" : r.hardwareType === "omada" ? "add MAC" : "set port"}
                       </span>
-                      {a.latencyMs != null ? <span className="text-[11px] text-subtle">{a.latencyMs} ms</span> : null}
-                    </td>
-                    {vendor ? null : <td className="py-2 pr-2 text-muted">{a.port ?? "—"}</td>}
-                    <td className="py-2 pr-2 text-right tabular-nums">{a.clients ?? "—"}</td>
-                    {vendor ? null : (
-                      <td className="py-2 pr-2 text-right tabular-nums text-muted">
-                        {a.signalDbm != null ? `${a.signalDbm} dBm` : "—"}
-                      </td>
+                    ) : (
+                      <>
+                        <p className="font-medium">KES {a.revenue.toLocaleString()}</p>
+                        <p className="text-[11px] text-subtle">{a.paidCustomers ?? 0} paying</p>
+                        {a.noIncome ? (
+                          <p className="text-[11px] text-warn" title={`Online, but no paying customers in the last ${days} days`}>
+                            No income
+                          </p>
+                        ) : lowEarners.has(a.id) ? (
+                          <p className="text-[11px] text-warn">Low earner</p>
+                        ) : null}
+                      </>
                     )}
-                    <td className="py-2 pr-2 text-right tabular-nums">{revenueCell(a)}</td>
-                    <td className="py-2 text-right">{actions(a)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+                  </td>
+                  <td className="py-2 text-right">
+                    {a.manual ? (
+                      <span className="flex justify-end gap-1">
+                        <button type="button" aria-label={`Edit ${a.name}`} className="rounded p-1 text-muted hover:text-fg" onClick={() => onEdit(a)}>
+                          <Pencil className="size-4" />
+                        </button>
+                        <button type="button" aria-label={`Remove ${a.name}`} className="rounded p-1 text-muted hover:text-danger" onClick={() => onDelete(a)}>
+                          <Trash2 className="size-4" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-subtle">auto</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {vendor ? (
-        <p className="mt-3 break-words text-xs text-subtle">
+        <p className="mt-3 text-xs text-subtle">
           {r.hardwareType === "omada"
             ? "Omada APs are not pinged from here: an AP shows Online while customers are connected through it (matched by the AP's MAC), otherwise grey. Client counts and revenue need the AP's MAC; revenue builds up as customers pay and use the Wi-Fi."
             : "Ruijie's portal does not report which AP a client uses, so APs here are a list only: no live status, client counts or revenue."}
         </p>
       ) : (
-        <p className="mt-3 break-words text-xs text-subtle">
-          Yellow "On · no income" means the AP is reachable but no paid customers were connected through it in the chosen period (new APs get a day first, and it only shows once the router port is set).
-          Status comes from pinging each AP from the router. Client counts and revenue need the AP's router port (each AP on its own port); signal strength is only available for radios built into the MikroTik itself. Revenue is successful M-Pesa payments, split by where each customer was connected, and builds up as customers use the Wi-Fi.
-        </p>
+      <p className="mt-3 text-xs text-subtle">
+        Yellow "On · no income" means the AP is reachable but no paid customers were connected through it in the chosen period (new APs get a day first, and it only shows once the router port is set).
+        Status comes from pinging each AP from the router. Client counts and revenue need the AP's router port (each AP on its own port); signal strength is only available for radios built into the MikroTik itself. Revenue is successful M-Pesa payments, split by where each customer was connected, and builds up as customers use the Wi-Fi.
+      </p>
       )}
     </Card>
   );
@@ -970,87 +872,48 @@ function ApTable({
 function PortsTable({ r }: { r: MapRouter }) {
   const ports = (r.live?.ports ?? []).filter((p) => !p.disabled && (p.running || p.type === "ether"));
   return (
-    <Card className={cn(CARD, "p-3 sm:p-4")}>
+    <Card className="p-4">
       <h2 className="font-display text-lg font-semibold">Active ports / interfaces</h2>
       {ports.length === 0 ? (
         <p className="mt-3 text-sm text-muted">
           {r.live?.error ? "Router unreachable — no port data." : "No port data yet. Press Refresh now."}
         </p>
       ) : (
-        <>
-          {/* Phones / small tablets: one card per port */}
-          <ul className="mt-3 min-w-0 space-y-2 md:hidden">
-            {ports.map((p) => (
-              <li key={p.name} className="min-w-0 rounded-xl border border-border p-3">
-                <div className="flex min-w-0 items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="break-words font-medium">{p.name}</p>
-                    <p className="break-words text-xs text-subtle">
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[30rem] text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-subtle">
+                <th className="py-1.5 pr-2 font-medium">Port</th>
+                <th className="py-1.5 pr-2 font-medium">Status</th>
+                <th className="py-1.5 pr-2 font-medium">IP</th>
+                <th className="py-1.5 pr-2 text-right font-medium">In</th>
+                <th className="py-1.5 text-right font-medium">Out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ports.map((p) => (
+                <tr key={p.name} className="border-t border-border">
+                  <td className="py-2 pr-2">
+                    <p className="font-medium">{p.name}</p>
+                    <p className="text-xs text-subtle">
                       {p.type}
                       {p.comment ? ` · ${p.comment}` : ""}
                     </p>
-                  </div>
-                  <span className="flex shrink-0 items-center gap-1.5 text-sm">
-                    <Dot state={p.running ? "ONLINE" : "OFFLINE"} />
-                    {p.running ? "Up" : "Down"}
-                  </span>
-                </div>
-                {/* IP gets a full row on phones so long addresses never squeeze In/Out */}
-                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                  <div className="col-span-2 min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">IP</dt>
-                    <dd className="break-all text-muted">{p.ip ?? "—"}</dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">In</dt>
-                    <dd className="break-words tabular-nums">{bps(p.rxBps)}</dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-[11px] uppercase tracking-wide text-subtle">Out</dt>
-                    <dd className="break-words tabular-nums">{bps(p.txBps)}</dd>
-                  </div>
-                </dl>
-              </li>
-            ))}
-          </ul>
-
-          {/* Tablet / desktop: table */}
-          <div className="mt-3 hidden min-w-0 overflow-x-auto md:block">
-            <table className="w-full min-w-[30rem] text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-subtle">
-                  <th className="py-1.5 pr-2 font-medium">Port</th>
-                  <th className="py-1.5 pr-2 font-medium">Status</th>
-                  <th className="py-1.5 pr-2 font-medium">IP</th>
-                  <th className="py-1.5 pr-2 text-right font-medium">In</th>
-                  <th className="py-1.5 text-right font-medium">Out</th>
+                  </td>
+                  <td className="py-2 pr-2">
+                    <span className="flex items-center gap-1.5">
+                      <Dot state={p.running ? "ONLINE" : "OFFLINE"} />
+                      {p.running ? "Up" : "Down"}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-2 text-muted">{p.ip ?? "—"}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums">{bps(p.rxBps)}</td>
+                  <td className="py-2 text-right tabular-nums">{bps(p.txBps)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {ports.map((p) => (
-                  <tr key={p.name} className="border-t border-border">
-                    <td className="py-2 pr-2">
-                      <p className="font-medium">{p.name}</p>
-                      <p className="text-xs text-subtle">
-                        {p.type}
-                        {p.comment ? ` · ${p.comment}` : ""}
-                      </p>
-                    </td>
-                    <td className="py-2 pr-2">
-                      <span className="flex items-center gap-1.5">
-                        <Dot state={p.running ? "ONLINE" : "OFFLINE"} />
-                        {p.running ? "Up" : "Down"}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-2 text-muted">{p.ip ?? "—"}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{bps(p.rxBps)}</td>
-                    <td className="py-2 text-right tabular-nums">{bps(p.txBps)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   );

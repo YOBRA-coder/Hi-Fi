@@ -44,7 +44,13 @@ function RewardsPage() {
       redeemPoints({ data: { packageId, token: device!.token, site: readSite() } }),
     onSuccess: (res) => {
       if (!res.ok) return void toast.error(res.error);
-      toast.success(res.queued ? "Redeemed! It will start when your current package ends." : "Redeemed! Connecting you now.");
+      toast.success(
+        res.awaiting
+          ? "Redeemed! It starts as soon as you are connected to the Wi-Fi."
+          : res.queued
+            ? "Redeemed! It will start when your current package ends."
+            : "Redeemed! Connecting you now.",
+      );
       qc.invalidateQueries();
       // Ruijie finishes login on the connect page (gateway hand-off), so go there like vouchers do.
       if (res.activationOk && !res.queued) setTimeout(() => navigate({ to: "/portal/connect" }), 900);

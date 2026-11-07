@@ -1,6 +1,6 @@
 import { getSql } from "@/lib/db";
 import { getSettings, logEvent } from "@/lib/services/settings.server";
-import { reconnectCustomer } from "@/lib/services/activation.server";
+import { reconnectCustomer, startAwaitingForDevice } from "@/lib/services/activation.server";
 import { normMac } from "./context.server";
 import { siteSlugForRouter, takeHandoffUrl } from "./index";
 
@@ -64,6 +64,14 @@ export async function tryAutoReconnect(opts: {
       where mac_norm = ${mac} and device_token is not null
     `;
     const tokens = [...new Set([`mac_${mac}`, ...known.map((r) => r.device_token)])];
+
+    // A package paid for from the link while this phone was away starts the moment it shows up.
+    for (const t of tokens) {
+      const started = await startAwaitingForDevice(t, {
+        siteId: await siteIdForRouter(opts.routerId),
+      }).catch(() => false);
+      if (started) break;
+    }
 
     const rows = await sql<{ id: string; customer_id: string; token: string }>`
       select cp.id, cp.customer_id, d.device_token as token

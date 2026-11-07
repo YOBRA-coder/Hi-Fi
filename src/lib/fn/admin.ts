@@ -1344,8 +1344,13 @@ export const saveSettingsAdmin = createServerFn({ method: "POST" })
         oneDevicePerPackage: z.boolean(),
         parallelDevicePackages: z.boolean().optional(),
         maxDevicesPerPackage: z.union([z.literal(1), z.literal(2)]).optional(),
+        payAwayMode: z.enum(["off", "block", "queue"]).optional(),
         maintenanceMode: z.boolean().optional(),
         maintenanceMessage: z.string().max(300).nullable().optional(),
+        routerLoginUrl: z
+          .union([z.literal(""), z.string().max(200).regex(/^https?:\/\/[^\s]+$/, "Use a full http:// or https:// address")])
+          .nullable()
+          .optional(),
         supportPhone: z.string().max(20).nullable().optional(),
         supportWhatsapp: z.string().max(20).nullable().optional(),
         supportMessage: z.string().max(300).nullable().optional(),
@@ -1395,8 +1400,10 @@ export const saveSettingsAdmin = createServerFn({ method: "POST" })
         one_device_per_package = ${data.oneDevicePerPackage},
         parallel_device_packages = ${data.parallelDevicePackages ?? true},
         max_devices_per_package = ${data.maxDevicesPerPackage ?? 1},
+        pay_away_mode = ${data.payAwayMode ?? "block"},
         maintenance_mode = ${data.maintenanceMode ?? false},
         maintenance_message = ${data.maintenanceMessage ?? null},
+        router_login_url = ${data.routerLoginUrl?.trim() || null},
         support_phone = ${data.supportPhone ?? null},
         support_whatsapp = ${data.supportWhatsapp ?? null},
         support_message = ${data.supportMessage ?? null},

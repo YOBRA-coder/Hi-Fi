@@ -284,9 +284,11 @@ function PaymentStatusPage() {
           ) : payment.activationStatus === "QUEUED" ? (
             <>
               <p className="text-sm text-muted">
-                You still have time left on your current package, so{" "}
-                {payment.packageName} is queued and will kick in automatically
-                the moment it ends — nothing to do now.
+                {payment.packageName} is paid for but its time has not started. If you
+                still have time on your current package it starts when that ends. If
+                you paid away from the Wi-Fi, connect to the Wi-Fi, open the login page
+                and tap Already paid? (enter your M-Pesa code) — the clock only starts
+                once you are connected.
               </p>
               <Button asChild size="lg" className="w-full" variant="secondary">
                 <Link to="/portal/account">View my account</Link>

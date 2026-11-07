@@ -113,6 +113,7 @@ async function sweepExpired(): Promise<number> {
     const nextQueued = await sql<{ payment_id: string }>`
       select payment_id from customer_packages
       where customer_id = ${row.customer_id} and status = 'QUEUED'
+        and activation_status is distinct from 'AWAITING_DEVICE'
         and (mikrotik_username is not distinct from ${row.mikrotik_username})
       order by start_time asc
       limit 1
@@ -141,6 +142,7 @@ async function sweepExpired(): Promise<number> {
     select distinct on (q.customer_id, q.mikrotik_username) q.payment_id
     from customer_packages q
     where q.status = 'QUEUED'
+      and q.activation_status is distinct from 'AWAITING_DEVICE'
       and q.start_time <= now()
       and not exists (
         select 1 from customer_packages a

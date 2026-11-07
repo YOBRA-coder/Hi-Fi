@@ -188,6 +188,15 @@ async function creditMinutesToCustomer(customerId: string, minutes: number): Pro
  * for the same payment (reconnects, auto-resume) only ever pays out once.
  */
 export async function applyReferralMinutesForPayment(paymentId: string): Promise<number> {
+  const minutes = await computeReferralMinutes(paymentId);
+  if (minutes > 0) {
+    const sql = await getSql();
+    await sql`update payments set referral_minutes_applied = ${minutes} where id = ${paymentId}`;
+  }
+  return minutes;
+}
+
+async function computeReferralMinutes(paymentId: string): Promise<number> {
   const sql = await getSql();
 
   const claimed = await sql<{ id: string; customer_id: string }>`
@@ -289,7 +298,7 @@ export async function applyReferralMinutesForPayment(paymentId: string): Promise
 }
 
 export type RedeemPointsResult =
-  | { ok: true; paymentId: string; activationOk: boolean; queued: boolean }
+  | { ok: true; paymentId: string; activationOk: boolean; queued: boolean; awaiting: boolean }
   | { ok: false; error: string };
 
 /**
@@ -322,6 +331,11 @@ export async function redeemPointsForPackage(input: {
     if (closedMsg) return { ok: false, error: closedMsg };
   }
   const cost = Number(pkg.points_cost);
+
+  // Same rule as paying: no points are spent while the phone is away from the router (block mode).
+  const { awayGate, AWAY_BLOCK_MESSAGE } = await import("./presence.server");
+  const away = await awayGate(input.deviceToken);
+  if (away.blocked) return { ok: false, error: AWAY_BLOCK_MESSAGE };
 
   const custRows = await sql<{ id: string; phone: string; loyalty_points: number; status: string }>`
     select id, phone, loyalty_points, status from customers where id = ${input.customerId} limit 1
@@ -357,11 +371,11 @@ export async function redeemPointsForPackage(input: {
     insert into payments (
       id, customer_id, package_id, mpesa_transaction_id, phone, amount,
       status, activation_status, result_code, result_desc, transaction_date,
-      created_at, updated_at
+      away, device_token, created_at, updated_at
     ) values (
       ${paymentId}, ${input.customerId}, ${input.packageId}, ${"PTS-" + paymentId}, ${customer.phone},
       ${pkg.price}, 'SUCCESS', 'NOT_ACTIVATED', 0, 'Redeemed with loyalty points',
-      now(), now(), now()
+      now(), ${away.away}, ${input.deviceToken ?? null}, now(), now()
     )
   `;
   await sql`
@@ -379,5 +393,6 @@ export async function redeemPointsForPackage(input: {
     paymentId,
     activationOk: act.ok,
     queued: act.ok && Boolean(act.queued),
+    awaiting: act.ok && Boolean(act.awaiting),
   };
 }

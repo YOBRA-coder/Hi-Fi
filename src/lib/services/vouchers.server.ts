@@ -2,6 +2,7 @@ import { getSql } from "@/lib/db";
 import { nid } from "@/lib/utils";
 import { activateFromPayment } from "./activation.server";
 import { logEvent } from "./settings.server";
+import { AWAY_BLOCK_MESSAGE, awayGate } from "./presence.server";
 import type { SqlRow } from "./rows.server";
 
 function randomCode(len = 10) {
@@ -100,6 +101,10 @@ export async function redeemVoucher(input: {
     if (closedMsg) throw new Error(closedMsg);
   }
 
+  // Same rule as paying: a phone that is not at the router cannot use up a voucher.
+  const away = await awayGate(input.deviceToken);
+  if (away.blocked) throw new Error(AWAY_BLOCK_MESSAGE);
+
   const gate = (
     await sql<{ require_account_multi_device: boolean | null }>`
       select require_account_multi_device from settings where id = 'default' limit 1
@@ -134,11 +139,11 @@ export async function redeemVoucher(input: {
     insert into payments (
       id, customer_id, package_id, mpesa_transaction_id, phone, amount,
       status, activation_status, result_code, result_desc, transaction_date,
-      site_id, created_at, updated_at
+      site_id, away, device_token, created_at, updated_at
     ) values (
       ${paymentId}, ${customer.id}, ${pkg.id}, ${"VCH-" + code}, ${normalized},
       ${pkg.price}, 'SUCCESS', 'NOT_ACTIVATED', 0, 'Voucher redeemed',
-      now(), ${v.site_id ?? "site_default"}, now(), now()
+      now(), ${v.site_id ?? "site_default"}, ${away.away}, ${input.deviceToken ?? null}, now(), now()
     )
   `;
 
@@ -162,6 +167,7 @@ export async function redeemVoucher(input: {
     packageName: String(pkg.name),
     activationOk: act.ok,
     queued: act.ok && Boolean(act.queued),
+    awaiting: act.ok && Boolean(act.awaiting),
   };
 }
 

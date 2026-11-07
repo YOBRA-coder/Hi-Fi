@@ -159,6 +159,27 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Vouchers/points follow the pay-away rule, referral minutes, installed app (migration 0043)
+
+- **Vouchers and loyalty points** use the same "pay away" setting as M-Pesa: blocked (or parked until the phone reaches the router) when the phone is not at the router, so a voucher or points are never spent on a package nobody can use.
+- **Referral bonus minutes.** The bonus is claimed once per payment, but if that first activation ended before the package existed (router/capacity failure) the retry used to create the package *without* the bonus. The applied minutes are now stored on the payment (`referral_minutes_applied`) and used by the retry. Minutes banked for a customer while their package waited in the queue are now added when that package starts, instead of sitting until their next purchase. The referred customer's bonus still needs a first *cash* purchase above the minimum package price (Settings).
+- **Installed app (PWA).** The router's login page is what tells us a phone's MAC/IP, and the installed app never goes through it. New setting "Router login page address" (Settings): with it, the app shows **Connect to the Wi-Fi**, which goes through the router and comes back with the phone identified. Connect no longer says "You are online" when the package is paid but the router did not put this phone online; it says so and offers the button.
+
+## Paying away from the router, owner-only sharing, remove/leave (migration 0042)
+
+- **Pay from the link while away.** Settings → Device sharing → "Paying from the link, away from the router":
+  - *Block* (default): the payment is refused until the phone has opened the router's login page in the last 30 minutes.
+  - *Queue*: the payment is taken but the package waits (`AWAITING_DEVICE`, clock stopped). It starts when that phone reaches the router
+    (portal visit, auto-reconnect, Connect, or **Already paid?** with the M-Pesa code). Expiry sweeps never start or expire a waiting package.
+  - *Off*: old behaviour.
+- **Sharing needs the owner signed in.** A share code can only be made by the signed-in account that owns the package, not by a joined phone.
+- **Remove / Leave.** The owner (signed-in account or the phone that paid) can remove a joined phone; a joined phone can leave by itself.
+  Only that phone is switched off (by MAC); the owner's phone and the payer phone cannot be removed.
+- **Phone number alone no longer takes a free slot.** `connectActive` now requires the device to already belong to the customer
+  (own device, payer, bound, or signed in). A second phone must use Add a device with a share code, or Already paid?.
+- **One slot only.** A phone that joined a shared package and then pays for its own leaves the shared package.
+- Not covered: vouchers and loyalty redemption still start immediately.
+
 ## Parallel mode: separate time per device (migration 0041)
 
 Settings → Device sharing → "Separate time for each device" (on by default; needs "One device per package").

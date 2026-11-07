@@ -920,6 +920,33 @@ export async function disconnectUser(username: string) {
   }
 }
 
+/**
+ * Drop ONE phone's hotspot session by MAC, leaving anyone else on the same login online
+ * (disconnectUser() drops every device on that username). Returns false when it cannot be
+ * done here (no live router, or the api6 connection which can only drop by user name).
+ */
+export async function disconnectMac(mac: string): Promise<boolean> {
+  if (!(await hasLiveRouter())) return false;
+  const creds = await getRouterCredentials();
+  if (!creds || creds.apiMode === "api6") return false;
+  const key = mac.toUpperCase();
+  const active = (await routeros(
+    `/rest/ip/hotspot/active?mac-address=${encodeURIComponent(key)}`,
+    {},
+    creds,
+  )) as Array<{ ".id"?: string }> | null;
+  for (const row of active ?? []) {
+    if (row[".id"]) {
+      await routeros(
+        `/rest/ip/hotspot/active/${encodeURIComponent(row[".id"])}`,
+        { method: "DELETE" },
+        creds,
+      );
+    }
+  }
+  return true;
+}
+
 export async function pingRouter(): Promise<{
   reachable: boolean;
   mode: "live" | "unconfigured";

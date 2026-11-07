@@ -159,3 +159,29 @@ export async function findClientContext(opts: {
   `;
   return rows[0] ? mapContext(rows[0]) : null;
 }
+
+/** How recently a phone must have been seen at the router for "it is here" (minutes). */
+export const PRESENCE_WINDOW_MIN = 30;
+
+/**
+ * True when this device's phone reached the router's login page within the last
+ * PRESENCE_WINDOW_MIN minutes. Used to stop a payment made from a link far from the
+ * router from starting a package nobody can use (the old 7-day context is far too loose).
+ */
+export async function hasFreshContext(deviceToken: string | null | undefined): Promise<boolean> {
+  const token = deviceToken?.trim();
+  if (!token) return false;
+  const sql = await getSql();
+  const rows = /^mac_[0-9a-f]{12}$/.test(token)
+    ? await sql<{ n: number }>`
+        select count(*)::int as n from hw_clients
+        where mac_norm = ${token.slice(4)}
+          and seen_at > now() - (${PRESENCE_WINDOW_MIN}::int * interval '1 minute')
+      `
+    : await sql<{ n: number }>`
+        select count(*)::int as n from hw_clients
+        where device_token = ${token}
+          and seen_at > now() - (${PRESENCE_WINDOW_MIN}::int * interval '1 minute')
+      `;
+  return Number(rows[0]?.n ?? 0) > 0;
+}

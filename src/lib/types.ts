@@ -93,8 +93,12 @@ export type Settings = {
   /** A package bought from another device starts at once on its own login instead of queueing. */
   parallelDevicePackages: boolean;
   maxDevicesPerPackage: number;
+  /** Paying from the link while the phone is not at the router: off | block | queue. */
+  payAwayMode: "off" | "block" | "queue";
   maintenanceMode: boolean;
   maintenanceMessage: string | null;
+  /** Router's own hotspot login page, used to bring an installed-app customer back through the router. */
+  routerLoginUrl: string | null;
   supportPhone: string | null;
   supportWhatsapp: string | null;
   supportMessage: string | null;

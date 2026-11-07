@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDevice } from "@/hooks/use-device";
 import { useHardwareHandoff } from "@/hooks/use-hardware-handoff";
-import { deviceInfo, readSite } from "@/lib/device";
+import { deviceInfo, readSite, wifiLoginHref } from "@/lib/device";
 import { formatRemaining, formatStamp } from "@/lib/format";
 import { APP_NAME } from "@/lib/brand-copy";
 import { PACKAGE_IN_USE_MESSAGE } from "@/lib/device";
@@ -145,6 +145,15 @@ function ConnectPage() {
             !("code" in connect.data && connect.data.code === "in_use") && (
             <p className="mt-4 text-sm text-danger">{connect.data.error}</p>
           )}
+          {connect.data &&
+            !connect.data.ok &&
+            "code" in connect.data &&
+            connect.data.code === "router" &&
+            wifiLoginHref(account.data?.routerLoginUrl) ? (
+            <Button asChild size="lg" className="mt-3 w-full" variant="secondary">
+              <a href={wifiLoginHref(account.data?.routerLoginUrl) ?? "#"}>Connect to the Wi-Fi</a>
+            </Button>
+          ) : null}
           {access?.otherDevice ? (
             <Button asChild size="xl" className="mt-6 w-full" variant="secondary">
               <Link to="/portal/packages">Buy a package for this phone</Link>
