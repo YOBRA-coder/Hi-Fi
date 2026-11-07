@@ -159,6 +159,10 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Branded loading screen
+
+- The empty pulsing box shown after an admin signs in (and while the console checks the session) is replaced by a Hi-Fi splash (logo, name, "Signing you in…" / "Opening your console…"). The login page keeps the splash up during the reload after a successful sign-in instead of flashing the form again, and any other slow page change now shows the same splash instead of a blank page.
+
 ## Live users upgrade and phone bottom bar
 
 - Live users: phone-friendly cards instead of a 12-column table on small screens (table kept for tablets and desktops), summary cards (online, downloaded, uploaded, ending in 15 min), a Live/Paused indicator with last-updated time and an Auto switch, ending-soon highlighted, and "Show more" after 50 rows.

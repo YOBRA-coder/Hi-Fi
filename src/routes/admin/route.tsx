@@ -1,5 +1,6 @@
 import { Navigate, Outlet, createFileRoute, useRouterState } from "@tanstack/react-router";
 import { AdminShell, OWNER_ONLY_PATHS } from "@/components/admin/admin-shell";
+import { BrandLoader } from "@/components/brand-loader";
 import { useOperatorSession } from "@/lib/operator";
 
 export const Route = createFileRoute("/admin")({
@@ -12,11 +13,7 @@ function AdminLayout() {
   const isLogin = pathname === "/admin/login";
 
   if (isPending) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-bg">
-        <div className="h-10 w-40 animate-pulse rounded-md bg-raised" />
-      </div>
-    );
+    return <BrandLoader className="bg-bg" label="Opening your console…" />;
   }
 
   if (isLogin) {

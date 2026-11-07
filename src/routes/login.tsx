@@ -2,6 +2,7 @@ import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { TelNetMark } from "@/components/brand";
+import { BrandLoader } from "@/components/brand-loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,16 +50,30 @@ function Login() {
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // After a successful sign-in the page reloads into the console: keep the Hi-Fi splash up meanwhile.
+  const [redirecting, setRedirecting] = useState(false);
 
+  if (redirecting) {
+    return (
+      <main className={LOGIN_ROOT}>
+        <BrandLoader label="Signing you in…" />
+      </main>
+    );
+  }
   if (isPending || info.isPending) {
     return (
-      <main className={`${LOGIN_ROOT} grid min-h-dvh place-items-center`}>
-        <div className="h-10 w-48 animate-pulse rounded-md bg-raised" />
+      <main className={LOGIN_ROOT}>
+        <BrandLoader />
       </main>
     );
   }
   if (isOperator) {
-    return <Navigate to="/admin/dashboard" />;
+    return (
+      <main className={LOGIN_ROOT}>
+        <Navigate to="/admin/dashboard" />
+        <BrandLoader label="Opening your console…" />
+      </main>
+    );
   }
   const legacy = Boolean(info.data?.legacy);
   const canOtp = Boolean(info.data?.otp);
@@ -85,6 +100,7 @@ function Login() {
           return;
         }
       }
+      setRedirecting(true);
       window.location.href = dest;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");
