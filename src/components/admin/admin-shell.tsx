@@ -51,7 +51,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
 
   return (
-    <div className="flex min-h-dvh w-full max-w-full overflow-x-clip bg-bg">
+    <div className="flex h-dvh w-full max-w-full overflow-hidden bg-bg lg:h-auto lg:min-h-dvh lg:overflow-x-clip lg:overflow-y-visible">
       <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-border bg-surface/60 px-3 py-5 lg:flex">
         <Link to="/admin/dashboard" className="mb-6 flex items-center gap-2 px-2">
           <TelNetMark className="size-6" />
@@ -83,8 +83,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
   </div>
       </aside>
 
-      <div className="flex min-w-0 max-w-full flex-1 flex-col">
-<header className="sticky top-0 z-50 bg-black flex items-center justify-between border-b border-border px-4 py-3 lg:hidden"> 
+      <div className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col">
+<header className="z-50 flex shrink-0 items-center justify-between border-b border-border bg-black px-4 py-3 lg:hidden"> 
   <Link to="/admin/dashboard" className="flex items-center gap-2"> 
     <TelNetMark className="size-6" /> 
     <span className="font-display font-semibold">{APP_NAME}</span> 
@@ -93,8 +93,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
     <OperatorUserButton /> 
   </div> 
 </header>
-        <div className="min-w-0 max-w-full flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</div>
-        <nav className="sticky bottom-0 grid grid-cols-4 border-t border-border bg-surface/95 px-1 py-1 lg:hidden">
+        {/* Phones: this is the only thing that scrolls. overscroll-contain stops the pull-down refresh
+            bounce, overflow-anchor:none stops the list jumping when live data refreshes. */}
+        <div className="min-h-0 min-w-0 max-w-full flex-1 overflow-y-auto overscroll-y-contain px-4 py-5 [overflow-anchor:none] sm:px-6 lg:overflow-visible lg:px-8">
+          {children}
+        </div>
+        <nav className="grid shrink-0 grid-cols-4 border-t border-border bg-surface px-1 pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom,0px))] lg:hidden">
           {nav.slice(0, 3).map((item) => {
             const active = pathname === item.to;
             return (

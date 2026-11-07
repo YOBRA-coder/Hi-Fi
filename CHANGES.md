@@ -159,6 +159,15 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Live users upgrade and phone bottom bar
+
+- Live users: phone-friendly cards instead of a 12-column table on small screens (table kept for tablets and desktops), summary cards (online, downloaded, uploaded, ending in 15 min), a Live/Paused indicator with last-updated time and an Auto switch, ending-soon highlighted, and "Show more" after 50 rows.
+- The admin layout on phones is now one screen tall and only the page area scrolls (top bar and bottom bar are plain flex children), so the bottom bar can no longer move, leave a gap, or bounce on Android; pull-down-to-refresh bounce is off inside the app and the live list no longer jumps when it refreshes. Desktop scrolling is unchanged. Applies to every admin page.
+
+## Network map on phones
+
+- The Network map page no longer runs off the right edge on narrow (Android) screens: its one-column grid was sizing itself to the 30rem tables, so the topology card and everything below it became wider than the screen and the admin shell clipped the right half. The column is now fixed to the screen width and the tables scroll inside their own card.
+
 ## Vouchers/points follow the pay-away rule, referral minutes, installed app (migration 0043)
 
 - **Vouchers and loyalty points** use the same "pay away" setting as M-Pesa: blocked (or parked until the phone reaches the router) when the phone is not at the router, so a voucher or points are never spent on a package nobody can use.
