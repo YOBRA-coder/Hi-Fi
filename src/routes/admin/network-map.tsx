@@ -155,7 +155,7 @@ function NetworkMapPage() {
   const routerForm = allRouters.find((r) => r.id === apForm.mikrotikId);
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 max-w-full space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight">Network map</h1>
@@ -188,7 +188,7 @@ function NetworkMapPage() {
       </div>
 
       {/* Summary cards — follow the selected site */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 [&>*]:min-w-0">
         <Summary
           icon={<RouterIcon className="size-4" />}
           title="Routers & gateways"
@@ -228,9 +228,9 @@ function NetworkMapPage() {
         />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {/* Topology grouped by site/town */}
-        <Card className="p-4 md:p-5">
+        <Card className="min-w-0 p-4 md:p-5">
           <h2 className="font-display text-lg font-semibold">Network topology</h2>
           <p className="text-xs text-subtle">Grouped by town. Tap a router for its details.</p>
 
@@ -401,7 +401,7 @@ function NetworkMapPage() {
         </Card>
 
         {/* Details for the selected router */}
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {selected ? (
             <>
               {selected.hardwareType === "mikrotik" ? <RouterStatus r={selected} /> : <VendorStatus r={selected} />}
@@ -575,7 +575,7 @@ function Summary({
   note?: string;
 }) {
   return (
-    <Card className="p-4">
+    <Card className="min-w-0 p-4">
       <p className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-subtle">
         {icon}
         {title}
