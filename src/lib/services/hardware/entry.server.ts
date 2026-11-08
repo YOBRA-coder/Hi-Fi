@@ -1,9 +1,11 @@
 import { getSql } from "@/lib/db";
+import { recordSiteIp } from "@/lib/services/presence.server";
 import { getHwRouter, saveClientContext, siteSlugForRouter } from "./index";
 import { onlinePage, safeContinueUrl, tryAutoReconnect } from "./auto-reconnect.server";
 
 /** Omada external-portal landing: remember who the client is, then show the normal portal. */
 export async function handleOmadaEntry(request: Request, routerId: string): Promise<Response> {
+  void recordSiteIp(request);
   const router = await getHwRouter(routerId);
   // Not an Omada/Ruijie row: it is a MikroTik (router id) or a site slug such as "main".
   if (!router) return handleMikrotikEntry(request, routerId);
@@ -44,6 +46,7 @@ export async function handleOmadaEntry(request: Request, routerId: string): Prom
  * the app uses them to log exactly this phone in on the router.
  */
 export async function handleMikrotikEntry(request: Request, key: string): Promise<Response> {
+  void recordSiteIp(request);
   const sql = await getSql();
   const rows = await sql<{ id: string; slug: string | null }>`
     select m.id, s.slug

@@ -83,3 +83,43 @@ export function wifiLoginHref(routerLoginUrl: string | null | undefined): string
   const sep = routerLoginUrl.includes("?") ? "&" : "?";
   return `${routerLoginUrl}${sep}dst=${encodeURIComponent(back)}`;
 }
+
+const HANDSHAKE_KEY = "hifi_wifi_handshake";
+const HANDSHAKE_COOLDOWN_MS = 10 * 60_000;
+const HANDSHAKE_RETURN_MS = 3 * 60_000;
+
+/**
+ * Send the phone through the router's login page and straight back, so the router tells us this
+ * phone's MAC/IP. At most once per 10 minutes (so it can never loop). Remembers the page to come
+ * back to. Returns false when it did nothing (no address set, or tried recently).
+ */
+export function startWifiHandshake(routerLoginUrl: string | null | undefined): boolean {
+  const href = wifiLoginHref(routerLoginUrl);
+  if (!href || typeof window === "undefined") return false;
+  try {
+    const last = JSON.parse(window.localStorage.getItem(HANDSHAKE_KEY) ?? "null") as { at?: number } | null;
+    if (last?.at && Date.now() - last.at < HANDSHAKE_COOLDOWN_MS) return false;
+    window.localStorage.setItem(
+      HANDSHAKE_KEY,
+      JSON.stringify({ at: Date.now(), back: window.location.pathname + window.location.search }),
+    );
+  } catch {
+    return false; // no storage: cannot guarantee it will not loop
+  }
+  window.location.assign(href);
+  return true;
+}
+
+/** After the round trip: the page the customer was on (once), so they carry on where they were. */
+export function takeWifiReturn(): string | null {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(HANDSHAKE_KEY) ?? "null") as
+      | { at?: number; back?: string }
+      | null;
+    if (!raw?.back || !raw.at || Date.now() - raw.at > HANDSHAKE_RETURN_MS) return null;
+    window.localStorage.setItem(HANDSHAKE_KEY, JSON.stringify({ at: raw.at }));
+    return raw.back.startsWith("/portal") && !raw.back.startsWith("//") ? raw.back : null;
+  } catch {
+    return null;
+  }
+}

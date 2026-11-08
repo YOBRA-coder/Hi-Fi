@@ -11,7 +11,11 @@ import {
   startAwaitingForDevice,
 } from "@/lib/services/activation.server";
 import { expireDuePackages } from "@/lib/services/expiry.server";
-import { AWAY_BLOCK_MESSAGE, awayGate } from "@/lib/services/presence.server";
+import {
+  AWAY_BLOCK_MESSAGE,
+  awayGate,
+  isOnSiteNetwork,
+} from "@/lib/services/presence.server";
 import {
   canManageDevices,
   deviceMayActFor,
@@ -390,7 +394,17 @@ export const startPayment = createServerFn({ method: "POST" })
     // its clock would run, and nobody could use it. Block (default) or park it (queue).
     const gate = await awayGate(data.token);
     if (gate.blocked) {
-      return { ok: false as const, notAtRouter: true as const, error: AWAY_BLOCK_MESSAGE };
+      // On the hotspot Wi-Fi but not yet linked (installed app): the app links the phone by itself;
+      // only a phone that is really off the Wi-Fi is told to join it.
+      const onSite = await isOnSiteNetwork();
+      return {
+        ok: false as const,
+        notAtRouter: true as const,
+        onSite,
+        error: onSite
+          ? "We could not link your phone to the Wi-Fi automatically. Tap Connect to the Wi-Fi below."
+          : "Join the hotspot Wi-Fi first, then try again.",
+      };
     }
     const payAway = gate.away;
 
@@ -1314,6 +1328,18 @@ export const joinHostPackage = createServerFn({ method: "POST" })
     return { ok: true as const, pack: res.pack };
   });
 
+
+/**
+ * For the installed app: is this phone already linked to the router (fresh), and is it on the hotspot
+ * Wi-Fi at all (onSite)? Fresh = nothing to do. On the Wi-Fi but not fresh = link it automatically.
+ */
+export const wifiStatus = createServerFn({ method: "POST" })
+  .validator((data: unknown) => z.object({ token: z.string().min(8).max(200) }).parse(data))
+  .handler(async ({ data }) => {
+    const fresh = await hasFreshContext(data.token);
+    const onSite = fresh ? true : await isOnSiteNetwork();
+    return { fresh, onSite };
+  });
 
 /** Look up the running package this device belongs to, for the device-management calls. */
 async function packageForDevice(token: string) {

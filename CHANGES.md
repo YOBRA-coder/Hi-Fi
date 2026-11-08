@@ -159,6 +159,12 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Installed app links the phone to the Wi-Fi by itself (migration 0044)
+
+- Opening the payment page in the installed app while on the hotspot Wi-Fi no longer ends in "connect to the Wi-Fi". If the phone is on the hotspot but not linked to the router yet, the app quietly goes through the router login page and straight back behind the Hi-Fi loading screen (at most once per 10 minutes), then returns to the page the customer was on. The same happens if they tap Pay first. Needs the "Router login page address" setting.
+- How it knows the phone is on the Wi-Fi: router login visits arrive from the hotspot's public IP, which is remembered (`site_public_ips`); the app asking from that IP (or from a private LAN address) counts as being on the Wi-Fi. Your reverse proxy must pass the real client address in X-Forwarded-For (or CF-Connecting-IP).
+- Only a phone that is really off the Wi-Fi is told "Join the hotspot Wi-Fi first". The manual Connect to the Wi-Fi button stays as a fallback.
+
 ## Returning admins skip the loading screen
 
 - After a successful session check the browser remembers (localStorage, this browser only) that it holds an operator session and the little the shell needs (name, owner flag). On the next visit the console appears immediately and the real check runs in the background; if it fails the hint is cleared and the operator goes to the login page, and if the network is down the console stays instead of throwing them out. It is only a hint: all data and actions are still authorised by the server. The login page never trusts the hint, and Sign out clears it. This also stops owner-only menu items from popping in late.
