@@ -81,6 +81,50 @@ async function sweepExpired(): Promise<number> {
       set status = 'EXPIRED', session_end = now()
       where customer_package_id = ${row.id} and status = 'ACTIVE'
     `;
+    // Hand over to the package queued behind this one FIRST, while the phone is still online, so the
+    // customer is never logged out between the two (see handover.server.ts). The same activation path
+    // as a fresh purchase runs, with the phone that was using the old package.
+    let handedOver = false;
+    const nextQueued = await sql<{ payment_id: string }>`
+      select payment_id from customer_packages
+      where customer_id = ${row.customer_id} and status = 'QUEUED'
+        and activation_status is distinct from 'AWAITING_DEVICE'
+        and (mikrotik_username is not distinct from ${row.mikrotik_username})
+      order by start_time asc
+      limit 1
+    `;
+    if (nextQueued[0]) {
+      try {
+        const oldDevices = await sql<{ device_token: string }>`
+          select device_token from customer_package_devices
+          where customer_package_id = ${row.id} order by bound_at asc
+        `;
+        const { activateFromPayment } = await import("./activation.server");
+        const res = await activateFromPayment(
+          String(nextQueued[0].payment_id),
+          oldDevices[0] ? { token: oldDevices[0].device_token } : undefined,
+          { promote: true },
+        );
+        if (res.ok && !res.queued) {
+          handedOver = true;
+          // The new package inherits the old one's devices (a shared package stays shared) and the
+          // other phones are logged in again straight away.
+          await sql`
+            insert into customer_package_devices (customer_package_id, device_token, device_info)
+            select ${res.pack.id}, d.device_token, d.device_info
+            from customer_package_devices d where d.customer_package_id = ${row.id}
+            on conflict do nothing
+          `;
+          if (oldDevices.length > 1) {
+            const { relinkBoundDevices } = await import("./handover.server");
+            await relinkBoundDevices(row.customer_id, res.pack.id).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error("[expiry] failed to promote queued package for", row.customer_id, err);
+      }
+    }
+
     // Two packages can share one hotspot login (same phone). Only switch the login off when
     // no OTHER running package still needs it, otherwise a paying customer loses internet.
     const stillNeeded = row.mikrotik_username
@@ -101,37 +145,11 @@ async function sweepExpired(): Promise<number> {
     }
     await logEvent(
       "EXPIRE",
-      `Package for ${row.phone} reached expiry. Session ended, hotspot user disabled.`,
+      handedOver
+        ? `Package for ${row.phone} ended; the next queued package took over without a disconnect.`
+        : `Package for ${row.phone} reached expiry. Session ended, hotspot user disabled.`,
     );
 
-    // A package bought while this one was still running was queued instead
-    // of overwriting it (see activateFromPayment). Now that this one is
-    // actually done, promote the oldest queued package for the same
-    // customer — same activation path as everything else, so router setup,
-    // device binding and sessions all get created exactly the way a fresh
-    // purchase would.
-    const nextQueued = await sql<{ payment_id: string }>`
-      select payment_id from customer_packages
-      where customer_id = ${row.customer_id} and status = 'QUEUED'
-        and activation_status is distinct from 'AWAITING_DEVICE'
-        and (mikrotik_username is not distinct from ${row.mikrotik_username})
-      order by start_time asc
-      limit 1
-    `;
-    if (nextQueued[0]) {
-      try {
-        const { activateFromPayment } = await import("./activation.server");
-        await activateFromPayment(String(nextQueued[0].payment_id), undefined, {
-          promote: true,
-        });
-      } catch (err) {
-        console.error(
-          "[expiry] failed to promote queued package for",
-          row.customer_id,
-          err,
-        );
-      }
-    }
   }
 
   // Safety net: a queued package whose turn has come but that was never

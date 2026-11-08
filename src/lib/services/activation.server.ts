@@ -395,6 +395,19 @@ async function activateFromPaymentUnlocked(
     60,
     Math.floor((expiry.getTime() - Date.now()) / 1000),
   );
+  // Another package queued behind this one on the same login: keep the router session alive a few minutes
+  // past this package's end so the phone is not logged out at that exact second. The sweep takes over
+  // within seconds (promotes the next package and re-logs the phone in); if nothing takes over, the sweep
+  // still switches the login off at expiry, so the grace never gives free time.
+  const nextBehind = await sql<{ id: string }>`
+    select id from customer_packages
+    where customer_id = ${pay.customer_id} and status = 'QUEUED'
+      and activation_status is distinct from 'AWAITING_DEVICE'
+      and mikrotik_username is not distinct from ${username}
+      and payment_id <> ${paymentId}
+    limit 1
+  `;
+  const routerSeconds = remaining + (nextBehind[0] ? 240 : 0);
 
   // Limits follow the ISP path(s) currently connected (see capacity.server.ts).
   // ...of THIS site only: seats and speed caps come from the ISP paths in the site the person is at.
@@ -451,7 +464,7 @@ async function activateFromPaymentUnlocked(
       // running, but the device is only switched on once the site opens (portal "Reconnect").
       const { isRouterClosedNow } = await import("./hours.server");
       if (!(await isRouterClosedNow(hwTarget.router.id))) {
-        hwAuth = await authorizeOnHardware(hwTarget, { username, seconds: remaining });
+        hwAuth = await authorizeOnHardware(hwTarget, { username, seconds: routerSeconds });
       }
     } else {
       await createAndActivateUser({
@@ -459,7 +472,7 @@ async function activateFromPaymentUnlocked(
         password,
         downloadKbps,
         uploadKbps,
-        sessionTimeoutSeconds: remaining,
+        sessionTimeoutSeconds: routerSeconds,
         customerId: String(pay.customer_id),
         maxDevices: settings.oneDevicePerPackage ? packageMaxDevices : 1,
         category: effCategory === "STUDENT" ? "STUDENT" : "STANDARD",

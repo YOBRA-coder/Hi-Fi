@@ -159,6 +159,13 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Queued packages hand over without a disconnect
+
+- **Before:** when a package ended the phone was logged out first (router kick, hotspot user disabled), and only then was the queued package started and the phone logged back in, so the customer saw a disconnect and the captive-portal pop-up, and shared devices lost their place.
+- **Now:** the sweep promotes the queued package FIRST, while the phone is still online, and the login is only switched off if nothing took over. The new package inherits the old package's devices (a shared package stays shared) and every device is logged in again straight away.
+- **No gap at the exact second:** a package with another queued behind it gets a few minutes of grace on its router session, and about 2 minutes before it ends its session is renewed once, so the router does not log the phone out at expiry. The grace never gives free time: if nothing takes over, the sweep still switches the login off at expiry.
+- **Fast:** a 15-second watcher (`handover.server.ts`) renews upcoming hand-overs and runs the expiry sweep, so the next package starts within seconds of the previous one ending. A package waiting for its phone (paid while away) still starts when that phone reaches the router.
+
 ## Installed app: link-up no longer spins forever
 
 - The "Linking your phone to the Wi-Fi…" screen could stay up forever: on Android the trip through the router login page runs in a small window over the app, so the app page never reloaded and never noticed it had finished, and the trip also swaps the phone's stored identity so the app kept checking the old one. While linking, the app now re-checks every 2 seconds and the moment it is shown again, restarts itself with the phone's new identity, and gives up after 15 seconds with a Connect to the Wi-Fi button instead of spinning.

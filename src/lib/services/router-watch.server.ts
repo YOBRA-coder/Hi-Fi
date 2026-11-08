@@ -37,6 +37,10 @@ export function startRouterWatch() {
   setInterval(() => {
     void pollOnce();
   }, POLL_INTERVAL_MS);
+  // Queued packages take over from an ending one within seconds, without the phone being logged out.
+  setInterval(() => {
+    void import("@/lib/services/handover.server").then((m) => m.handoverTick()).catch(() => {});
+  }, 15_000);
 }
 
 startRouterWatch();
