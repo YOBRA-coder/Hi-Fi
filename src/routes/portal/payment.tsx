@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { useDevice } from "@/hooks/use-device";
 import { BrandLoader } from "@/components/brand-loader";
 import { useWifiHandshake } from "@/hooks/use-wifi-handshake";
-import { readSite, startWifiHandshake, wifiLoginHref } from "@/lib/device";
+import { readSite, wifiLoginHref } from "@/lib/device";
 import { formatDuration, formatKes, formatSpeed } from "@/lib/format";
 import { getPortalBootstrap, startPayment } from "@/lib/fn/portal";
 import { formatPhoneDisplay, isKenyanPhone } from "@/lib/phone";
@@ -56,8 +56,7 @@ function PaymentPage() {
   const pkg = packages.find((p: Package) => p.id === packageId);
 
   // Link the phone to the router by itself (installed app) before the customer can hit an error.
-  const linking = useWifiHandshake(device?.token, settings.routerLoginUrl, ready && Boolean(device));
-  const [bounce, setBounce] = useState(false);
+  const wifi = useWifiHandshake(device?.token, settings.routerLoginUrl, ready && Boolean(device));
 
   const start = useMutation({
     mutationFn: async () => {
@@ -78,8 +77,7 @@ function PaymentPage() {
       if (!res.ok) {
         if ("notAtRouter" in res && res.notAtRouter) {
           // On the Wi-Fi but not linked yet: do it now, quietly, and bring them back here.
-          if ("onSite" in res && res.onSite && startWifiHandshake(settings.routerLoginUrl)) {
-            setBounce(true);
+          if ("onSite" in res && res.onSite && wifi.begin()) {
             throw new Error("Linking your phone to the Wi-Fi…");
           }
           setNotAtRouter(true);
@@ -104,7 +102,7 @@ function PaymentPage() {
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
   });
 
-  if (linking || bounce) {
+  if (wifi.linking) {
     return <BrandLoader className="bg-bg" label="Linking your phone to the Wi-Fi…" />;
   }
 
@@ -180,7 +178,12 @@ function PaymentPage() {
           </div>
         ) : null}
         {error && <p className="text-sm text-danger">{error}</p>}
-        {notAtRouter && wifiLoginHref(settings.routerLoginUrl) ? (
+        {wifi.failed && !error ? (
+          <p className="text-sm text-muted">
+            We could not link your phone to the Wi-Fi automatically. Tap Connect to the Wi-Fi below, then come back and pay.
+          </p>
+        ) : null}
+        {(notAtRouter || wifi.failed) && wifiLoginHref(settings.routerLoginUrl) ? (
           <Button asChild type="button" variant="secondary" size="lg" className="w-full">
             <a href={wifiLoginHref(settings.routerLoginUrl) ?? "#"}>Connect to the Wi-Fi</a>
           </Button>

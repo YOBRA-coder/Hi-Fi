@@ -159,6 +159,11 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Installed app: link-up no longer spins forever
+
+- The "Linking your phone to the Wi-Fi…" screen could stay up forever: on Android the trip through the router login page runs in a small window over the app, so the app page never reloaded and never noticed it had finished, and the trip also swaps the phone's stored identity so the app kept checking the old one. While linking, the app now re-checks every 2 seconds and the moment it is shown again, restarts itself with the phone's new identity, and gives up after 15 seconds with a Connect to the Wi-Fi button instead of spinning.
+- A phone on the hotspot's own network is no longer stopped from paying just because it is not linked to the router yet; it pays, then is linked (the Connect page now does the link-up by itself too).
+
 ## Events page
 
 - New **Events** page (owners only, in the menu) shows the full system log, newest first, with the full text of every entry: search (e.g. "mismatch" or an M-Pesa code), type filter, period, a **Problems only** switch (failed, ignored, could not be confirmed, amount mismatch...), Show more, and CSV download. A callback that matches no payment is now logged too.

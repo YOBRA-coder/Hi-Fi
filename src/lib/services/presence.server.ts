@@ -14,6 +14,9 @@ export async function awayGate(token: string | null | undefined): Promise<{ bloc
   const settings = await getSettings();
   if (settings.payAwayMode === "off") return { blocked: false, away: false };
   if (await hasFreshContext(token)) return { blocked: false, away: false };
+  // On the hotspot's own network but not linked to the router yet (installed app): they are here, so do not
+  // stop them paying. Linking happens right after, with the quick trip through the router login page.
+  if (await isOnSiteNetwork()) return { blocked: false, away: false };
   return settings.payAwayMode === "block" ? { blocked: true, away: false } : { blocked: false, away: true };
 }
 

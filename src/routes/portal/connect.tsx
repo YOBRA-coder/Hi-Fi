@@ -5,7 +5,9 @@ import { PortalShell } from "@/components/portal/portal-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDevice } from "@/hooks/use-device";
+import { BrandLoader } from "@/components/brand-loader";
 import { useHardwareHandoff } from "@/hooks/use-hardware-handoff";
+import { useWifiHandshake } from "@/hooks/use-wifi-handshake";
 import { deviceInfo, readSite, wifiLoginHref } from "@/lib/device";
 import { formatRemaining, formatStamp } from "@/lib/format";
 import { APP_NAME } from "@/lib/brand-copy";
@@ -67,6 +69,15 @@ function ConnectPage() {
   );
 
   useHardwareHandoff(connected, device?.token);
+
+  // Paid and active, but the router has not put THIS phone online (installed app): link it by itself.
+  const routerFail = Boolean(
+    connect.data && !connect.data.ok && "code" in connect.data && connect.data.code === "router",
+  );
+  const wifi = useWifiHandshake(device?.token, account.data?.routerLoginUrl, ready && Boolean(device) && routerFail);
+  if (wifi.linking) {
+    return <BrandLoader className="bg-bg" label="Linking your phone to the Wi-Fi…" />;
+  }
 
   if (!ready || account.isLoading) {
     return (
