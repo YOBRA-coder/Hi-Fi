@@ -2,6 +2,10 @@
 const POLL_INTERVAL_MS = 60_000;
 
 async function pollOnce() {
+  // Paid-but-unconfirmed M-Pesa payments get settled even if the customer closed the app.
+  void import("@/lib/services/callback.server")
+    .then((m) => m.reconcilePendingPayments())
+    .catch(() => {});
   try {
     // Every router (not just the primary) so outages are noticed — and
     // credited — per router. Imported lazily to avoid a db.ts import cycle.

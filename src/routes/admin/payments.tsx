@@ -28,6 +28,7 @@ import {
   retryPaymentActivation,
   listActivationQueue,
   retryActivationAdmin,
+  setPaymentReceipt,
 } from "@/lib/fn/admin";
 import { formatKes, formatStamp } from "@/lib/format";
 import { formatPhoneDisplay } from "@/lib/phone";
@@ -53,6 +54,15 @@ function PaymentsPage() {
       queue.refetch();
       qc.invalidateQueries({ queryKey: ["payments"] });
     },
+  });
+  const addReceipt = useMutation({
+    mutationFn: (v: { paymentId: string; receipt: string }) => setPaymentReceipt({ data: v }),
+    onSuccess: (r) => {
+      if (r.ok) toast.success("Receipt saved");
+      else toast.error(r.error);
+      qc.invalidateQueries({ queryKey: ["payments"] });
+    },
+    onError: () => toast.error("Could not save the receipt."),
   });
   const [phone, setPhone] = useState("");
   const [status, setStatus] = useState("ALL");
@@ -234,7 +244,23 @@ function PaymentsPage() {
             {list.map((p) => (
               <TableRow key={p.id} className="whitespace-nowrap">
                 <TableCell className="font-mono text-xs">
-                  {p.mpesaTransactionId ?? "—"}
+                  {p.mpesaTransactionId ? (
+                    p.mpesaTransactionId
+                  ) : p.status === "SUCCESS" ? (
+                    <button
+                      type="button"
+                      className="rounded border border-warn/40 px-1.5 py-0.5 text-[11px] text-warn hover:bg-warn/10"
+                      title="Paid and activated, but the M-Pesa receipt was never received. Tap to type it in."
+                      onClick={() => {
+                        const code = window.prompt("M-Pesa code for this payment (from the M-Pesa message):");
+                        if (code) addReceipt.mutate({ paymentId: p.id, receipt: code });
+                      }}
+                    >
+                      Add receipt
+                    </button>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="tabular-nums">
                   {formatPhoneDisplay(p.phone)}

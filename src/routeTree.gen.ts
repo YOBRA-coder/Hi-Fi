@@ -16,6 +16,7 @@ import { Route as PortalRouteRouteImport } from './routes/portal/route'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as AdminCustomersRouteImport } from './routes/admin/customers'
 import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
+import { Route as AdminEventsRouteImport } from './routes/admin/events'
 import { Route as AdminLiveUsersRouteImport } from './routes/admin/live-users'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminNetworkRouteImport } from './routes/admin/network'
@@ -82,6 +83,11 @@ const AdminCustomersRoute = AdminCustomersRouteImport.update({
 const AdminDashboardRoute = AdminDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminEventsRoute = AdminEventsRouteImport.update({
+  id: '/events',
+  path: '/events',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminLiveUsersRoute = AdminLiveUsersRouteImport.update({
@@ -252,6 +258,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/admin/customers': typeof AdminCustomersRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/events': typeof AdminEventsRoute
   '/admin/live-users': typeof AdminLiveUsersRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/network': typeof AdminNetworkRoute
@@ -291,6 +298,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/admin/customers': typeof AdminCustomersRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/events': typeof AdminEventsRoute
   '/admin/live-users': typeof AdminLiveUsersRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/network': typeof AdminNetworkRoute
@@ -333,6 +341,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/admin/customers': typeof AdminCustomersRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/events': typeof AdminEventsRoute
   '/admin/live-users': typeof AdminLiveUsersRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/network': typeof AdminNetworkRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/admin/customers'
     | '/admin/dashboard'
+    | '/admin/events'
     | '/admin/live-users'
     | '/admin/login'
     | '/admin/network'
@@ -415,6 +425,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/admin/customers'
     | '/admin/dashboard'
+    | '/admin/events'
     | '/admin/live-users'
     | '/admin/login'
     | '/admin/network'
@@ -456,6 +467,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/admin/customers'
     | '/admin/dashboard'
+    | '/admin/events'
     | '/admin/live-users'
     | '/admin/login'
     | '/admin/network'
@@ -555,6 +567,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/admin/dashboard'
       preLoaderRoute: typeof AdminDashboardRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/events': {
+      id: '/admin/events'
+      path: '/events'
+      fullPath: '/admin/events'
+      preLoaderRoute: typeof AdminEventsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/live-users': {
@@ -787,6 +806,7 @@ declare module '@tanstack/react-router' {
 interface AdminRouteRouteChildren {
   AdminCustomersRoute: typeof AdminCustomersRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminEventsRoute: typeof AdminEventsRoute
   AdminLiveUsersRoute: typeof AdminLiveUsersRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminNetworkRoute: typeof AdminNetworkRoute
@@ -803,6 +823,7 @@ interface AdminRouteRouteChildren {
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminCustomersRoute: AdminCustomersRoute,
   AdminDashboardRoute: AdminDashboardRoute,
+  AdminEventsRoute: AdminEventsRoute,
   AdminLiveUsersRoute: AdminLiveUsersRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminNetworkRoute: AdminNetworkRoute,

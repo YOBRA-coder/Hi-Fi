@@ -23,7 +23,9 @@ async function tick(request: Request) {
   const clockSkewMs = await measureClockSkew().catch(() => null);
   const probed = await probeAllRouters().catch(() => -1);
   const expired = await expireDuePackages().catch(() => -1);
-  return Response.json({ ok: true, routersProbed: probed, expired, clockSkewMs, at: new Date().toISOString() });
+  const { reconcilePendingPayments } = await import("@/lib/services/callback.server");
+  const paymentsSettled = await reconcilePendingPayments().catch(() => -1);
+  return Response.json({ ok: true, routersProbed: probed, expired, paymentsSettled, clockSkewMs, at: new Date().toISOString() });
 }
 
 export const Route = createFileRoute("/api/cron/tick")({

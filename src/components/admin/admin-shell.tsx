@@ -10,7 +10,7 @@ import {
   ShoppingBag,
   Ticket,
   Users,
-  Wifi, Network,
+  Wifi, Network, ScrollText,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { TelNetMark } from "@/components/brand";
@@ -37,11 +37,12 @@ const NAV = [
   { to: "/admin/reports", label: "Reports", icon: Activity },
   { to: "/admin/network", label: "Network", icon: Radio },
   { to: "/admin/network-map", label: "Network map", icon: Network },
+  { to: "/admin/events", label: "Events", icon: ScrollText },
   { to: "/admin/settings", label: "Settings", icon: Settings },
 ] as const;
 
 /** Pages only owners can use (site-limited operators don't see them). */
-export const OWNER_ONLY_PATHS = ["/admin/packages", "/admin/network", "/admin/settings"];
+export const OWNER_ONLY_PATHS = ["/admin/packages", "/admin/network", "/admin/settings", "/admin/events"];
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });

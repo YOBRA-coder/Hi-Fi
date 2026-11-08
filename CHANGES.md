@@ -159,6 +159,16 @@ plugin and needs to pick up the new `/portal/add-device` route.
 - The ACTIVATED event now says how long activation took and how many router calls it made, so slow spots are visible.
 - `deploy/SLOW_ACTIVATION.md`: step-by-step measurement procedure (SMS → callback → router login → phone).
 
+## Events page
+
+- New **Events** page (owners only, in the menu) shows the full system log, newest first, with the full text of every entry: search (e.g. "mismatch" or an M-Pesa code), type filter, period, a **Problems only** switch (failed, ignored, could not be confirmed, amount mismatch...), Show more, and CSV download. A callback that matches no payment is now logged too.
+
+## M-Pesa receipt no longer lost; pending payments settle in the background (migration 0045)
+
+- **Cause of a paid, activated payment with no receipt:** on production, a "success" callback is only trusted after Safaricom confirms it by query. If that query was busy or not ready yet, the callback was dropped (Safaricom sends it once). The customer's status page then settled the payment from the query, which never returns the receipt. Now the receipt the callback carried is kept (`pending_receipt`) and used when the payment settles.
+- **Background settlement.** Payments still PENDING after 45 seconds are checked with Safaricom every minute (server watcher and `/api/cron/tick`), so a paid payment no longer waits for the customer to reopen the app.
+- **Admin → Transactions:** a successful payment with no receipt shows an **Add receipt** button to type the code from the M-Pesa message (one receipt per payment).
+
 ## Installed app links the phone to the Wi-Fi by itself (migration 0044)
 
 - Opening the payment page in the installed app while on the hotspot Wi-Fi no longer ends in "connect to the Wi-Fi". If the phone is on the hotspot but not linked to the router yet, the app quietly goes through the router login page and straight back behind the Hi-Fi loading screen (at most once per 10 minutes), then returns to the page the customer was on. The same happens if they tap Pay first. Needs the "Router login page address" setting.

@@ -65,7 +65,7 @@ import {
   listVouchersPage,
   vouchersForPrint,
 } from "@/lib/services/vouchers.server";
-import { processActivationRetries } from "../services/callback.server";
+import { cleanReceipt, processActivationRetries } from "../services/callback.server";
 
 /** "ALL"/undefined = every site. Payments/customers with no site count as the main site. */
 const siteParam = z.object({ siteId: z.string().optional() }).optional();
@@ -3040,4 +3040,101 @@ export const shopOrderAction = createServerFn({ method: "POST" })
     else if (data.action === "delivered") await markDelivered(data.id);
     else await markRefunded(data.id, data.action === "refunded");
     return { ok: true as const };
+  });
+
+/**
+ * A payment that was confirmed and activated but has no M-Pesa receipt (the callback never arrived):
+ * type the code from the M-Pesa message / statement so the customer can use "Already paid?" and the
+ * records are complete. Only a SUCCESS payment with no receipt can be filled in, and a receipt can
+ * only belong to one payment.
+ */
+export const setPaymentReceipt = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: unknown) =>
+    z.object({ paymentId: z.string().min(3).max(80), receipt: z.string().min(6).max(20) }).parse(data),
+  )
+  .handler(async ({ data }) => {
+    const receipt = cleanReceipt(data.receipt);
+    if (!receipt) return { ok: false as const, error: "That does not look like an M-Pesa code (e.g. UK8HQ1P8W5)." };
+    const sql = await getSql();
+    const used = await sql<{ id: string }>`
+      select id from payments where upper(mpesa_transaction_id) = ${receipt} limit 1
+    `;
+    if (used[0]) return { ok: false as const, error: "That receipt is already saved on another payment." };
+    const done = await sql<{ id: string }>`
+      update payments set mpesa_transaction_id = ${receipt}, updated_at = now()
+      where id = ${data.paymentId} and status = 'SUCCESS' and mpesa_transaction_id is null
+      returning id
+    `;
+    if (!done[0]) return { ok: false as const, error: "Only a successful payment with no receipt can be filled in." };
+    await logEvent("PAYMENT", `Receipt ${receipt} added by hand to payment ${data.paymentId}.`).catch(() => {});
+    return { ok: true as const };
+  });
+
+/**
+ * The full system event log (payments settled/ignored, activation failures, referral bonuses,
+ * device removals, router outages...). Owner only: events are system-wide, not per site.
+ * "Problems" = anything that failed, was ignored, could not be confirmed, or did not match.
+ */
+const PROBLEM_RE =
+  "fail|error|mismatch|does not match|could not|ignored|denied|blocked|unavailable|held for retry|expired";
+export const listEventsAdmin = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: unknown) =>
+    z
+      .object({
+        search: z.string().max(80).optional(),
+        type: z.string().max(60).optional(),
+        period: z.enum(["TODAY", "WEEK", "MONTH", "ALL"]).optional(),
+        problemsOnly: z.boolean().optional(),
+        limit: z.number().int().min(50).max(1000).optional(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    if (await operatorLock()) {
+      return { events: [] as ReturnType<typeof mapEvent>[], total: 0, hasMore: false, types: [] as { type: string; n: number }[] };
+    }
+    const sql = await getSql();
+    const ps = await getPeriodStarts();
+    const limit = data.limit ?? 100;
+    const like = data.search?.trim() ? "%" + data.search.trim().replace(/[\\%_]/g, "\\$&") + "%" : null;
+    const type = data.type && data.type !== "ALL" ? data.type : null;
+    const period = data.period ?? "ALL";
+    const problems = Boolean(data.problemsOnly);
+    const rows = await sql<SqlRow>`
+      select * from network_events
+      where (${like}::text is null or description ilike ${like} or event_type ilike ${like})
+        and (${type}::text is null or event_type = ${type})
+        and (${problems}::boolean = false or event_type ~* ${PROBLEM_RE} or description ~* ${PROBLEM_RE})
+        and (
+          ${period} = 'ALL'
+          or (${period} = 'TODAY' and created_at >= ${ps.dayStart}::timestamptz)
+          or (${period} = 'WEEK' and created_at >= ${ps.weekStart}::timestamptz)
+          or (${period} = 'MONTH' and created_at >= ${ps.monthStart}::timestamptz)
+        )
+      order by created_at desc
+      limit ${limit + 1}
+    `;
+    const total = await sql<{ n: number }>`
+      select count(*)::int as n from network_events
+      where (${like}::text is null or description ilike ${like} or event_type ilike ${like})
+        and (${type}::text is null or event_type = ${type})
+        and (${problems}::boolean = false or event_type ~* ${PROBLEM_RE} or description ~* ${PROBLEM_RE})
+        and (
+          ${period} = 'ALL'
+          or (${period} = 'TODAY' and created_at >= ${ps.dayStart}::timestamptz)
+          or (${period} = 'WEEK' and created_at >= ${ps.weekStart}::timestamptz)
+          or (${period} = 'MONTH' and created_at >= ${ps.monthStart}::timestamptz)
+        )
+    `;
+    const types = await sql<{ type: string; n: number }>`
+      select event_type as type, count(*)::int as n from network_events group by event_type order by n desc
+    `;
+    return {
+      events: rows.slice(0, limit).map(mapEvent),
+      total: Number(total[0]?.n ?? 0),
+      hasMore: rows.length > limit,
+      types: types.map((t) => ({ type: String(t.type), n: Number(t.n) })),
+    };
   });
