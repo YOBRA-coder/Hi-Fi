@@ -802,7 +802,11 @@ function ApTable({
                   <td className="py-2 pr-2 text-right tabular-nums">{a.clients ?? "—"}</td>
                   {vendor ? null : (
                     <td className="py-2 pr-2 text-right tabular-nums text-muted">
-                      {a.signalDbm != null ? `${a.signalDbm} dBm` : "—"}
+                      {a.signalDbm != null ? (
+                        `${a.signalDbm} dBm`
+                      ) : (
+                        <span title="Signal is only readable from radios built into the MikroTik. External APs (Tenda, Rocket, etc.) do not report it to the router.">n/a</span>
+                      )}
                     </td>
                   )}
                   <td className="py-2 pr-2 text-right tabular-nums">
@@ -871,6 +875,16 @@ function ApTable({
 
 function PortsTable({ r }: { r: MapRouter }) {
   const ports = (r.live?.ports ?? []).filter((p) => !p.disabled && (p.running || p.type === "ether"));
+  // port -> manually added APs on it, and port -> devices the router sees there (neighbor discovery).
+  // A neighbor already listed as an AP (same IP) is not repeated.
+  const portAps = new Map<string, AccessPointRow[]>();
+  for (const a of r.aps) if (a.manual && a.port) portAps.set(a.port, [...(portAps.get(a.port) ?? []), a]);
+  const apIps = new Set(r.aps.map((a) => a.ip).filter(Boolean));
+  const portNeighbors = new Map<string, NonNullable<MapRouter["live"]>["neighbors"]>();
+  for (const n of r.live?.neighbors ?? []) {
+    if (!n.port || (n.ip && apIps.has(n.ip))) continue;
+    portNeighbors.set(n.port, [...(portNeighbors.get(n.port) ?? []), n]);
+  }
   return (
     <Card className="p-4">
       <h2 className="font-display text-lg font-semibold">Active ports / interfaces</h2>
@@ -885,7 +899,7 @@ function PortsTable({ r }: { r: MapRouter }) {
               <tr className="text-left text-xs uppercase tracking-wide text-subtle">
                 <th className="py-1.5 pr-2 font-medium">Port</th>
                 <th className="py-1.5 pr-2 font-medium">Status</th>
-                <th className="py-1.5 pr-2 font-medium">IP</th>
+                <th className="py-1.5 pr-2 font-medium">IP / device on port</th>
                 <th className="py-1.5 pr-2 text-right font-medium">In</th>
                 <th className="py-1.5 text-right font-medium">Out</th>
               </tr>
@@ -906,7 +920,24 @@ function PortsTable({ r }: { r: MapRouter }) {
                       {p.running ? "Up" : "Down"}
                     </span>
                   </td>
-                  <td className="py-2 pr-2 text-muted">{p.ip ?? "—"}</td>
+                  <td className="py-2 pr-2 text-muted">
+                    {p.ip ? <p>{p.ip}</p> : null}
+                    {/* APs / devices plugged into this port: their IP, status and live clients */}
+                    {(portAps.get(p.name) ?? []).map((a) => (
+                      <p key={a.id} className="text-xs">
+                        <span className="text-fg">{a.label ? `#${a.label} ` : ""}{a.name}</span>
+                        {a.ip ? ` · ${a.ip}` : ""}
+                        {a.clients != null ? ` · ${a.clients} client${a.clients === 1 ? "" : "s"}` : ""}
+                      </p>
+                    ))}
+                    {(portNeighbors.get(p.name) ?? []).map((n, i) => (
+                      <p key={`${n.mac ?? n.name}-${i}`} className="text-xs">
+                        {n.name || n.model || "Device"}
+                        {n.ip ? ` · ${n.ip}` : ""}
+                      </p>
+                    ))}
+                    {!p.ip && !(portAps.get(p.name) ?? []).length && !(portNeighbors.get(p.name) ?? []).length ? "—" : null}
+                  </td>
                   <td className="py-2 pr-2 text-right tabular-nums">{bps(p.rxBps)}</td>
                   <td className="py-2 text-right tabular-nums">{bps(p.txBps)}</td>
                 </tr>

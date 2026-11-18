@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ActivationBadge, PaymentBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -70,14 +70,22 @@ function PaymentsPage() {
   const [packageId, setPackageId] = useState("ALL");
   const [period, setPeriod] = useState("ALL");
   const [siteId] = useAdminSite();
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+  // Any filter change starts again from the first page.
+  useEffect(() => {
+    setPage(1);
+  }, [phone, status, activation, packageId, period, siteId]);
   const pkgs = useQuery({ queryKey: ["packages"], queryFn: () => listPackagesAdmin() });
   const q = useQuery({
-    queryKey: ["payments", phone, status, activation, packageId, period, siteId],
+    queryKey: ["payments", phone, status, activation, packageId, period, siteId, page],
     placeholderData: (prev) => prev,
     queryFn: () =>
       listPaymentsAdmin({
         data: {
           siteId,
+          page,
+          pageSize: PAGE_SIZE,
           phone: phone || undefined,
           status: status === "ALL" ? undefined : status,
           activationStatus: activation === "ALL" ? undefined : activation,
@@ -98,23 +106,54 @@ function PaymentsPage() {
   });
 
   const list = q.data?.rows ?? [];
-  // Money = real M-Pesa only (voucher VCH- and points PTS- redemptions are free packages), as on Reports.
-  const isFree = (id: string | null) => Boolean(id && (id.startsWith("VCH-") || id.startsWith("PTS-")));
-  const paidRows = list.filter((p) => p.status === "SUCCESS" && !isFree(p.mpesaTransactionId));
-  const total = paidRows.reduce((n, p) => n + p.amount, 0);
+  // Totals are computed by the server over every matching transaction (not just
+  // this page), with the same rule as the Dashboard and Reports: money = real
+  // M-Pesa only (voucher VCH- and points PTS- redemptions are free packages).
+  const total = q.data?.paidTotal ?? 0;
+  const paidCount = q.data?.paidCount ?? 0;
+  const matching = q.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(matching / PAGE_SIZE));
+  const from = matching === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(page * PAGE_SIZE, matching);
+  // Filters narrowed while on a later page: step back instead of showing nothing.
+  useEffect(() => {
+    if (q.data && page > 1 && q.data.rows.length === 0) setPage(1);
+  }, [q.data, page]);
 
-  function exportCsv() {
-    const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-    const head = ["Receipt", "Phone", "Amount", "Package", "Site", "Payment", "Activation", "Date"];
-    const lines = list.map((p) =>
-      [p.mpesaTransactionId, p.phone, p.amount, p.packageName, p.siteName, p.status, p.activationStatus, p.createdAt].map(esc).join(","),
-    );
-    const blob = new Blob([[head.map(esc).join(","), ...lines].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+  const [exporting, setExporting] = useState(false);
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      // Export everything that matches the filters, not only the visible page.
+      const all = await listPaymentsAdmin({
+        data: {
+          siteId,
+          page: 1,
+          pageSize: 5000,
+          phone: phone || undefined,
+          status: status === "ALL" ? undefined : status,
+          activationStatus: activation === "ALL" ? undefined : activation,
+          packageId: packageId === "ALL" ? undefined : packageId,
+          period: period === "ALL" ? "ALL" : (period as "TODAY" | "WEEK" | "MONTH"),
+        },
+      });
+      const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
+      const head = ["Receipt", "Phone", "Amount", "Package", "Site", "Payment", "Activation", "Date"];
+      const lines = all.rows.map((p) =>
+        [p.mpesaTransactionId, p.phone, p.amount, p.packageName, p.siteName, p.status, p.activationStatus, p.createdAt].map(esc).join(","),
+      );
+      const blob = new Blob([[head.map(esc).join(","), ...lines].join("\n")], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      if (all.total > all.rows.length) toast.message(`Exported the latest ${all.rows.length} of ${all.total}. Narrow the filters for the rest.`);
+    } catch {
+      toast.error("Could not export. Try again.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -149,16 +188,15 @@ function PaymentsPage() {
         </div>
         <div className="flex items-center gap-3">
           <SiteSwitcher />
-          <Button variant="outline" onClick={exportCsv} disabled={list.length === 0}>
-            Export CSV
+          <Button variant="outline" onClick={exportCsv} disabled={list.length === 0 || exporting}>
+            {exporting ? "Exporting…" : "Export CSV"}
           </Button>
         </div>
       </div>
       <p className="text-sm text-muted">
-        <span className="font-medium text-fg tabular-nums">{list.length}</span> shown ·{" "}
-        <span className="font-medium text-fg tabular-nums">{formatKes(total)}</span> paid by M-Pesa in this list (
-        {paidRows.length})
-        {q.data?.truncated ? " · only the latest 200 are shown — narrow the filters to see older ones" : ""}
+        <span className="font-medium text-fg tabular-nums">{matching.toLocaleString()}</span> transactions ·{" "}
+        <span className="font-medium text-fg tabular-nums">{formatKes(total)}</span> paid by M-Pesa across all of them (
+        {paidCount}) · voucher and points redemptions are not counted as money
       </p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Input
@@ -292,6 +330,30 @@ function PaymentsPage() {
           </TableBody>
         </Table>
       </div>
+      {matching > PAGE_SIZE && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="text-muted tabular-nums">
+            Showing {from}–{to} of {matching.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setPage(1)} disabled={page <= 1 || q.isFetching}>
+              First
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setPage((n) => Math.max(1, n - 1))} disabled={page <= 1 || q.isFetching}>
+              Previous
+            </Button>
+            <span className="px-1 tabular-nums text-muted">
+              Page {page} of {pageCount}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => setPage((n) => Math.min(pageCount, n + 1))} disabled={page >= pageCount || q.isFetching}>
+              Next
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setPage(pageCount)} disabled={page >= pageCount || q.isFetching}>
+              Last
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

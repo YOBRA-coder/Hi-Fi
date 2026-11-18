@@ -903,6 +903,8 @@ export const listPaymentsAdmin = createServerFn({ method: "POST" })
         activationStatus: z.string().optional(),
         period: z.enum(["ALL", "TODAY", "WEEK", "MONTH"]).optional(),
         siteId: z.string().optional(),
+        page: z.number().int().min(1).max(10000).optional(),
+        pageSize: z.number().int().min(1).max(5000).optional(),
       })
       .parse(data),
   )
@@ -917,9 +919,21 @@ export const listPaymentsAdmin = createServerFn({ method: "POST" })
     const phonePrefix = find.kind === "prefix" ? find.digits + "%" : null;
     const phoneContains = find.kind === "contains" ? "%" + find.digits + "%" : null;
     const textLike = find.kind === "text" ? "%" + find.text + "%" : null;
+    const pageSize = data.pageSize ?? 50;
+    const offset = ((data.page ?? 1) - 1) * pageSize;
+    // Totals come from the database over EVERY matching row (same rule as the
+    // Dashboard and Reports: successful M-Pesa only, voucher/points excluded),
+    // so they no longer depend on how many rows are on screen.
     const rows = await sql<SqlRow>`
       select p.*, pkg.name as package_name,
-             coalesce(p.site_id, 'site_default') as pay_site_id, st.name as pay_site_name
+             coalesce(p.site_id, 'site_default') as pay_site_id, st.name as pay_site_name,
+             count(*) over ()::int as total_rows,
+             coalesce(sum(case when p.status = 'SUCCESS'
+               and coalesce(p.mpesa_transaction_id, '') not like 'PTS-%'
+               and coalesce(p.mpesa_transaction_id, '') not like 'VCH-%' then p.amount else 0 end) over (), 0)::int as paid_total,
+             (count(*) filter (where p.status = 'SUCCESS'
+               and coalesce(p.mpesa_transaction_id, '') not like 'PTS-%'
+               and coalesce(p.mpesa_transaction_id, '') not like 'VCH-%') over ())::int as paid_count
       from payments p
       join packages pkg on pkg.id = p.package_id
       left join sites st on st.id = coalesce(p.site_id, 'site_default')
@@ -939,13 +953,18 @@ export const listPaymentsAdmin = createServerFn({ method: "POST" })
           or (${data.period ?? "ALL"} = 'WEEK' and p.created_at >= ${ps.weekStart}::timestamptz)
           or (${data.period ?? "ALL"} = 'MONTH' and p.created_at >= ${ps.monthStart}::timestamptz)
         )
-      order by p.created_at desc
-      limit 201
+      order by p.created_at desc, p.id desc
+      limit ${pageSize} offset ${offset}
     `;
-    // One extra row tells the page there is more than it is showing.
+    // An out-of-range page (filters narrowed while on page 3) comes back empty
+    // with no totals; the page then steps back to page 1 on its own.
     return {
-      truncated: rows.length > 200,
-      rows: rows.slice(0, 200).map((r) => ({
+      total: Number(rows[0]?.total_rows ?? 0),
+      paidTotal: Number(rows[0]?.paid_total ?? 0),
+      paidCount: Number(rows[0]?.paid_count ?? 0),
+      page: data.page ?? 1,
+      pageSize,
+      rows: rows.map((r) => ({
         ...mapPayment(r),
         siteId: String(r.pay_site_id ?? "site_default"),
         siteName: String(r.pay_site_name ?? "Main site"),
@@ -3138,3 +3157,4 @@ export const listEventsAdmin = createServerFn({ method: "POST" })
       types: types.map((t) => ({ type: String(t.type), n: Number(t.n) })),
     };
   });
+  
